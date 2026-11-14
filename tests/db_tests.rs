@@ -1,0 +1,550 @@
+//! Real-PostgreSQL integration tests for Agency Service.
+//!
+//! Requires DATABASE_URL pointing at a migrated `agency_db`.
+//! Run: DATABASE_URL=postgres://postgres:***@127.0.0.1:5432/agency_db cargo test --test db_tests
+//!
+//! Covers: migrations applied, CRUD, temporal hierarchy/assignments,
+//! cycle prevention, overlap rejection, transfers, outbox+audit atomicity,
+//! optimistic concurrency, idempotency, and concurrent reparent safety.
+
+use std::time::Duration;
+
+use chrono::NaiveDate;
+use iaop_agency_service_application::commands::*;
+use iaop_agency_service_application::error::AppError;
+use iaop_agency_service_application::ports::{IdempotencyReserve, IdempotencyStore, OrgStore};
+use iaop_agency_service_application::principal::Principal;
+use iaop_agency_service_domain::assignment::AssignmentType;
+use iaop_agency_service_domain::entity_id::EntityId;
+use iaop_agency_service_domain::org_unit::UnitKind;
+use iaop_agency_service_infrastructure::idempotency::PgIdempotencyStore;
+use iaop_agency_service_infrastructure::org_store::PgOrgStoreWithPool;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+fn principal() -> Principal {
+    Principal {
+        subject: "test-admin".into(),
+        issuer: "test".into(),
+        scopes: vec![],
+        roles: vec![
+            "agency:create".into(),
+            "agency:read".into(),
+            "agency:update".into(),
+            "agency:hierarchy:manage".into(),
+            "agency:assignment:manage".into(),
+            "agency:transfer:request".into(),
+            "agency:leadership:manage".into(),
+        ],
+        agent_scope: None,
+    }
+}
+
+async fn pool() -> Option<PgPool> {
+    let url = std::env::var("DATABASE_URL").ok()?;
+    Some(PgPool::connect(&url).await.expect("connect"))
+}
+
+fn store(pool: &PgPool) -> PgOrgStoreWithPool {
+    PgOrgStoreWithPool { pool: pool.clone() }
+}
+
+fn d(s: &str) -> NaiveDate {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+}
+
+async fn mk_agency(pool: &PgPool, code: &str) -> EntityId {
+    let store = store(pool);
+    let mut tx = pool.begin().await.unwrap();
+    let dto = create_agency(
+        &store,
+        &mut tx,
+        CreateAgency {
+            code: code.into(),
+            name: format!("Agency {code}"),
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    dto.id
+}
+
+async fn mk_unit(
+    pool: &PgPool,
+    agency: EntityId,
+    code: &str,
+    kind: UnitKind,
+    parent: Option<EntityId>,
+    from: &str,
+) -> EntityId {
+    let store = store(pool);
+    let mut tx = pool.begin().await.unwrap();
+    let dto = create_unit(
+        &store,
+        &mut tx,
+        CreateUnit {
+            agency_id: agency,
+            code: code.into(),
+            name: format!("Unit {code}"),
+            kind,
+            parent_id: parent,
+            effective_from: d(from),
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    dto.id
+}
+
+// ---------- schema / CRUD ----------
+
+#[tokio::test]
+async fn agency_crud_and_unique_code() {
+    let Some(pool) = pool().await else { return };
+    let code = format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]);
+    let id = mk_agency(&pool, &code).await;
+    let store = store(&pool);
+    assert!(store.get_agency(id).await.unwrap().is_some());
+    assert!(store.get_agency_by_code(&code).await.unwrap().is_some());
+
+    // duplicate code rejected
+    let mut tx = pool.begin().await.unwrap();
+    let err = create_agency(
+        &store,
+        &mut tx,
+        CreateAgency {
+            code: code.clone(),
+            name: "dup".into(),
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, AppError::Conflict(_)));
+    drop(tx);
+}
+
+#[tokio::test]
+async fn outbox_and_audit_written_atomically() {
+    let Some(pool) = pool().await else { return };
+    let code = format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]);
+    let id = mk_agency(&pool, &code).await;
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox_events WHERE aggregate_id=$1 AND event_type='agency.created.v1'",
+    )
+    .bind(id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 1, "exactly one outbox event for agency.create");
+    let a: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM agency_audit_events WHERE aggregate_id=$1 AND action='agency.create'",
+    )
+    .bind(id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(a, 1, "audit record written");
+}
+
+// ---------- hierarchy ----------
+
+#[tokio::test]
+async fn hierarchy_ancestors_descendants_and_cycle_rejection() {
+    let Some(pool) = pool().await else { return };
+    let ag = mk_agency(
+        &pool,
+        &format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]),
+    )
+    .await;
+    let region = mk_unit(&pool, ag, "R1", UnitKind::Region, None, "2026-01-01").await;
+    let branch_a = mk_unit(
+        &pool,
+        ag,
+        "BA",
+        UnitKind::Branch,
+        Some(region),
+        "2026-01-01",
+    )
+    .await;
+    let _branch_b = mk_unit(
+        &pool,
+        ag,
+        "BB",
+        UnitKind::Branch,
+        Some(region),
+        "2026-01-01",
+    )
+    .await;
+    let team = mk_unit(
+        &pool,
+        ag,
+        "T1",
+        UnitKind::Team,
+        Some(branch_a),
+        "2026-01-01",
+    )
+    .await;
+
+    let store = store(&pool);
+    let anc = store.ancestors(team).await.unwrap();
+    assert_eq!(anc.len(), 2);
+    assert!(anc.contains(&branch_a) && anc.contains(&region));
+    let desc = store.descendants(region).await.unwrap();
+    assert_eq!(desc.len(), 3);
+
+    // moving region under its own descendant must fail (cycle)
+    let mut tx = pool.begin().await.unwrap();
+    let err = change_parent(
+        &store,
+        &mut tx,
+        ChangeParent {
+            unit_id: region,
+            new_parent_id: Some(team),
+            effective_from: d("2026-02-01"),
+            expected_version: 1,
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(err, AppError::Conflict(_)),
+        "cycle must be rejected: {err:?}"
+    );
+    drop(tx);
+}
+
+#[tokio::test]
+async fn temporal_hierarchy_as_of() {
+    let Some(pool) = pool().await else { return };
+    let ag = mk_agency(
+        &pool,
+        &format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]),
+    )
+    .await;
+    let r1 = mk_unit(&pool, ag, "R1", UnitKind::Region, None, "2026-01-01").await;
+    let r2 = mk_unit(&pool, ag, "R2", UnitKind::Region, None, "2026-01-01").await;
+    let br = mk_unit(&pool, ag, "BR", UnitKind::Branch, Some(r1), "2026-01-01").await;
+
+    // reparent branch r1 -> r2 effective April
+    let store = store(&pool);
+    let mut tx = pool.begin().await.unwrap();
+    change_parent(
+        &store,
+        &mut tx,
+        ChangeParent {
+            unit_id: br,
+            new_parent_id: Some(r2),
+            effective_from: d("2026-04-01"),
+            expected_version: 1,
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    // Feb: still under r1; May: under r2
+    let feb = store.ancestors_as_of(br, d("2026-02-15")).await.unwrap();
+    assert!(
+        feb.contains(&r1) && !feb.contains(&r2),
+        "Feb hierarchy wrong: {feb:?}"
+    );
+    let may = store.ancestors_as_of(br, d("2026-05-15")).await.unwrap();
+    assert!(
+        may.contains(&r2) && !may.contains(&r1),
+        "May hierarchy wrong: {may:?}"
+    );
+}
+
+// ---------- assignments & transfers ----------
+
+#[tokio::test]
+async fn assignment_overlap_rejected_and_transfer_preserves_history() {
+    let Some(pool) = pool().await else { return };
+    let ag = mk_agency(
+        &pool,
+        &format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]),
+    )
+    .await;
+    let ba = mk_unit(&pool, ag, "BA", UnitKind::Branch, None, "2026-01-01").await;
+    let bb = mk_unit(&pool, ag, "BB", UnitKind::Branch, None, "2026-01-01").await;
+    let agent = EntityId::new();
+    let store = store(&pool);
+    let _ = &store;
+
+    // primary assignment to BA from Jan
+    let mut tx = pool.begin().await.unwrap();
+    let a1 = assign_agent(
+        &store,
+        &mut tx,
+        AssignAgent {
+            agent_id: agent,
+            unit_id: ba,
+            assignment_type: AssignmentType::Primary,
+            effective_from: d("2026-01-01"),
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    // overlapping second primary -> reject
+    let mut tx = pool.begin().await.unwrap();
+    let err = assign_agent(
+        &store,
+        &mut tx,
+        AssignAgent {
+            agent_id: agent,
+            unit_id: bb,
+            assignment_type: AssignmentType::Primary,
+            effective_from: d("2026-02-01"),
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(err, AppError::Conflict(_)),
+        "overlap must fail: {err:?}"
+    );
+    drop(tx);
+
+    // transfer to BB effective April: ends BA at Apr, creates BB
+    let mut tx = pool.begin().await.unwrap();
+    let (_new_a, transfer) = transfer_agent(
+        &store,
+        &mut tx,
+        TransferAgent {
+            agent_id: agent,
+            to_unit_id: bb,
+            effective_from: d("2026-04-01"),
+            reason: Some("promotion".into()),
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(transfer.agent_id, agent);
+
+    // history: March -> BA, May -> BB
+    let mar = store
+        .assignments_for_agent_as_of(agent, d("2026-03-15"))
+        .await
+        .unwrap();
+    assert!(mar.iter().any(|a| a.unit_id == ba), "March should show BA");
+    let may = store
+        .assignments_for_agent_as_of(agent, d("2026-05-15"))
+        .await
+        .unwrap();
+    assert!(may.iter().any(|a| a.unit_id == bb), "May should show BB");
+    assert!(
+        may.iter().all(|a| a.unit_id != ba),
+        "old assignment must be ended"
+    );
+    let _ = a1;
+}
+
+// ---------- concurrency ----------
+
+#[tokio::test]
+async fn concurrent_reparent_one_wins_or_both_valid() {
+    let Some(pool) = pool().await else { return };
+    let ag = mk_agency(
+        &pool,
+        &format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]),
+    )
+    .await;
+    let r = mk_unit(&pool, ag, "R", UnitKind::Region, None, "2026-01-01").await;
+    let b1 = mk_unit(&pool, ag, "B1", UnitKind::Branch, Some(r), "2026-01-01").await;
+    let b2 = mk_unit(&pool, ag, "B2", UnitKind::Branch, Some(r), "2026-01-01").await;
+
+    // Two concurrent reparents of b1 under b2's subtree is impossible here;
+    // instead race two reparents of DIFFERENT units under each other is a
+    // cycle scenario: b1->b2 and b2->b1 concurrently. At least one must fail.
+    let store = store(&pool);
+    let p = principal();
+    let (res1, res2) = tokio::join!(
+        async {
+            let mut tx = pool.begin().await.unwrap();
+            let r = change_parent(
+                &store,
+                &mut tx,
+                ChangeParent {
+                    unit_id: b1,
+                    new_parent_id: Some(b2),
+                    effective_from: d("2026-03-01"),
+                    expected_version: 1,
+                    principal: p.clone(),
+                },
+            )
+            .await;
+            if r.is_ok() {
+                tx.commit().await.unwrap();
+            }
+            r.map(|_| ())
+        },
+        async {
+            let mut tx = pool.begin().await.unwrap();
+            let r = change_parent(
+                &store,
+                &mut tx,
+                ChangeParent {
+                    unit_id: b2,
+                    new_parent_id: Some(b1),
+                    effective_from: d("2026-03-01"),
+                    expected_version: 1,
+                    principal: p.clone(),
+                },
+            )
+            .await;
+            if r.is_ok() {
+                tx.commit().await.unwrap();
+            }
+            r.map(|_| ())
+        },
+    );
+    // Not both can succeed (would create a 2-cycle) — at least one errors.
+    assert!(
+        res1.is_err() || res2.is_err(),
+        "mutual reparent must not both succeed"
+    );
+}
+
+// ---------- idempotency ----------
+
+#[tokio::test]
+async fn idempotency_replay_and_conflict() {
+    let Some(pool) = pool().await else { return };
+    let idem = PgIdempotencyStore::new();
+    let mut tx = pool.begin().await.unwrap();
+    let fp = "fingerprint-1";
+    let key = format!("key-{}", Uuid::now_v7());
+    let r1 = idem
+        .reserve(&mut tx, "subj", "op", &key, fp, Duration::from_secs(3600))
+        .await
+        .unwrap();
+    let IdempotencyReserve::Acquired { record_id } = r1 else {
+        panic!("first reserve must acquire")
+    };
+    idem.complete(&mut tx, record_id, 201, serde_json::json!({"ok": true}))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    // replay: same key+fingerprint returns stored response
+    let mut tx = pool.begin().await.unwrap();
+    let r2 = idem
+        .reserve(&mut tx, "subj", "op", &key, fp, Duration::from_secs(3600))
+        .await
+        .unwrap();
+    assert!(matches!(r2, IdempotencyReserve::Replay { status: 201, .. }));
+    drop(tx);
+
+    // conflict: same key, different fingerprint
+    let mut tx = pool.begin().await.unwrap();
+    let r3 = idem
+        .reserve(
+            &mut tx,
+            "subj",
+            "op",
+            &key,
+            "fingerprint-2",
+            Duration::from_secs(3600),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(r3, IdempotencyReserve::Conflict));
+    drop(tx);
+}
+
+// ---------- leadership ----------
+
+#[tokio::test]
+async fn leadership_assign_end_and_duplicate_role_rejected() {
+    let Some(pool) = pool().await else { return };
+    let ag = mk_agency(
+        &pool,
+        &format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]),
+    )
+    .await;
+    let unit = mk_unit(&pool, ag, "U1", UnitKind::Branch, None, "2026-01-01").await;
+    let agent = EntityId::new();
+    let store = store(&pool);
+
+    let mut tx = pool.begin().await.unwrap();
+    let dto = assign_leader(
+        &store,
+        &mut tx,
+        AssignLeader {
+            unit_id: unit,
+            agent_id: agent,
+            role: iaop_agency_service_domain::leadership::LeadershipRole::UnitHead,
+            effective_from: d("2026-01-01"),
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    // duplicate open role rejected
+    let mut tx = pool.begin().await.unwrap();
+    let err = assign_leader(
+        &store,
+        &mut tx,
+        AssignLeader {
+            unit_id: unit,
+            agent_id: EntityId::new(),
+            role: iaop_agency_service_domain::leadership::LeadershipRole::UnitHead,
+            effective_from: d("2026-02-01"),
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, AppError::Conflict(_)));
+    drop(tx);
+
+    // end it
+    let mut tx = pool.begin().await.unwrap();
+    let ended = end_leader(
+        &store,
+        &mut tx,
+        EndLeader {
+            appointment_id: dto.id,
+            effective_to: d("2026-06-01"),
+            expected_version: dto.version,
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(ended.status, "ENDED");
+
+    // after end, same role can be reassigned
+    let mut tx = pool.begin().await.unwrap();
+    let dto2 = assign_leader(
+        &store,
+        &mut tx,
+        AssignLeader {
+            unit_id: unit,
+            agent_id: EntityId::new(),
+            role: iaop_agency_service_domain::leadership::LeadershipRole::UnitHead,
+            effective_from: d("2026-06-01"),
+            principal: principal(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_ne!(dto2.id, dto.id);
+}
