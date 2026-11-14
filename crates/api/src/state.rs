@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use iaop_agency_service_application::ports::{IdempotencyStore, OrgStore, TokenValidator};
+use iaop_agency_service_infrastructure::agent_validation::AgentValidatorImpl;
 use iaop_agency_service_infrastructure::config::AppConfig;
 use iaop_agency_service_infrastructure::idempotency::PgIdempotencyStore;
 use iaop_agency_service_infrastructure::jwt::TokenValidatorImpl;
@@ -24,6 +25,7 @@ pub struct ServicePorts {
     pub org_store: PgOrgStoreWithPool,
     pub idempotency: PgIdempotencyStore,
     pub token_validator: TokenValidatorImpl,
+    pub agent_validator: AgentValidatorImpl,
 }
 
 // Trait bounds kept for documentation; ports are used via concrete types.

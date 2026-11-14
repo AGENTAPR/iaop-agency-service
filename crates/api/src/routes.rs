@@ -628,7 +628,12 @@ async fn assign_agent(
         Ok(v) => v,
         Err(r) => return r,
     };
-    match commands::assign_agent(store, &mut tx, cmd).await {
+    let res = if let Some(services) = state.services.as_ref() {
+        commands::assign_agent_validated(store, &services.agent_validator, &mut tx, cmd).await
+    } else {
+        commands::assign_agent(store, &mut tx, cmd).await
+    };
+    match res {
         Ok(dto) => {
             let body = serde_json::to_value(&dto).unwrap_or(serde_json::Value::Null);
             if let Some(rid) = idem {
@@ -745,7 +750,12 @@ async fn transfer_agent(
         Ok(v) => v,
         Err(r) => return r,
     };
-    match commands::transfer_agent(store, &mut tx, cmd).await {
+    let res = if let Some(services) = state.services.as_ref() {
+        commands::transfer_agent_validated(store, &services.agent_validator, &mut tx, cmd).await
+    } else {
+        commands::transfer_agent(store, &mut tx, cmd).await
+    };
+    match res {
         Ok((dto, _t)) => {
             let body = serde_json::to_value(&dto).unwrap_or(serde_json::Value::Null);
             if let Some(rid) = idem {

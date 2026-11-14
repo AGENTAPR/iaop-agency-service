@@ -10,7 +10,9 @@ use iaop_agency_service_domain::org_unit::{OrgUnit, UnitKind, UnitStatus, would_
 
 use crate::error::AppError;
 use crate::permissions;
-use crate::ports::{AuditRecord, OrgStore, OutboxEvent, Tx};
+use crate::ports::{
+    AgentValidationPort, AuditRecord, NoopAgentValidator, OrgStore, OutboxEvent, Tx,
+};
 use crate::principal::Principal;
 
 #[derive(Debug, Clone)]
@@ -244,7 +246,17 @@ pub async fn assign_agent<S: OrgStore>(
     tx: &mut Tx<'_>,
     cmd: AssignAgent,
 ) -> Result<AssignmentDto, AppError> {
+    assign_agent_validated(store, &NoopAgentValidator, tx, cmd).await
+}
+
+pub async fn assign_agent_validated<S: OrgStore, V: AgentValidationPort>(
+    store: &S,
+    validator: &V,
+    tx: &mut Tx<'_>,
+    cmd: AssignAgent,
+) -> Result<AssignmentDto, AppError> {
     permissions::require(&cmd.principal, permissions::Permission::AssignmentManage)?;
+    validator.validate_agent_active(cmd.agent_id).await?;
     let unit = store
         .get_unit(cmd.unit_id)
         .await?
@@ -296,7 +308,17 @@ pub async fn transfer_agent<S: OrgStore>(
     tx: &mut Tx<'_>,
     cmd: TransferAgent,
 ) -> Result<(AssignmentDto, Transfer), AppError> {
+    transfer_agent_validated(store, &NoopAgentValidator, tx, cmd).await
+}
+
+pub async fn transfer_agent_validated<S: OrgStore, V: AgentValidationPort>(
+    store: &S,
+    validator: &V,
+    tx: &mut Tx<'_>,
+    cmd: TransferAgent,
+) -> Result<(AssignmentDto, Transfer), AppError> {
     permissions::require(&cmd.principal, permissions::Permission::TransferRequest)?;
+    validator.validate_agent_active(cmd.agent_id).await?;
     let to_unit = store
         .get_unit(cmd.to_unit_id)
         .await?

@@ -250,6 +250,20 @@ pub trait EventTransport: Send + Sync {
     async fn deliver(&self, event: &IntegrationEvent) -> Result<(), String>;
 }
 
+/// Authoritative validation port for cross-service Agent checks against Agent Registry.
+pub trait AgentValidationPort: Send + Sync {
+    async fn validate_agent_active(&self, agent_id: EntityId) -> Result<(), AppError>;
+}
+
+/// No-op agent validator for standalone testing and non-integrated local dev.
+pub struct NoopAgentValidator;
+
+impl AgentValidationPort for NoopAgentValidator {
+    async fn validate_agent_active(&self, _agent_id: EntityId) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
 /// Reserved placeholder matching earlier scaffold references.
 #[derive(Debug)]
 pub enum IdemOutcome {

@@ -3,6 +3,7 @@
 //! Adapters: configuration, PostgreSQL persistence (org store,
 //! idempotency, outbox publisher), JWT/JWKS validation, event transport.
 
+pub mod agent_validation;
 pub mod config;
 pub mod idempotency;
 pub mod jwt;
