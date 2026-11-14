@@ -135,6 +135,12 @@ pub trait OrgStore {
         agent_id: EntityId,
         as_of: NaiveDate,
     ) -> Result<Vec<Assignment>, AppError>;
+    /// Assignments for a unit covering `as_of`.
+    async fn assignments_for_unit_as_of(
+        &self,
+        unit_id: EntityId,
+        as_of: NaiveDate,
+    ) -> Result<Vec<Assignment>, AppError>;
     /// All assignments for an agent (history).
     async fn assignments_for_agent(&self, agent_id: EntityId) -> Result<Vec<Assignment>, AppError>;
     /// Primary assignments overlapping [from, to) — overlap detection.

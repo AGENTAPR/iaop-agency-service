@@ -51,6 +51,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/organization-units/{id}/descendants",
             get(get_descendants),
         )
+        .route(
+            "/api/v1/organization-units/{id}/assignments",
+            get(unit_assignments),
+        )
         .route("/api/v1/agent-assignments", post(assign_agent))
         .route(
             "/api/v1/agents/{agent_id}/assignments",
@@ -684,6 +688,26 @@ async fn agent_current_assignment(
         Err(r) => return r,
     };
     match queries::agent_assignments_as_of(store, agent_id, None, &p).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => respond(e),
+    }
+}
+
+async fn unit_assignments(
+    State(state): State<AppState>,
+    AuthPrincipal(p): AuthPrincipal,
+    Path(id): Path<String>,
+    Query(q): Query<AsOfQuery>,
+) -> Response {
+    let unit_id = match parse_id(&id) {
+        Ok(i) => i,
+        Err(r) => return r,
+    };
+    let store = match store(&state) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    match queries::unit_assignments_as_of(store, unit_id, q.as_of, &p).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => respond(e),
     }

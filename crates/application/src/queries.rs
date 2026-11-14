@@ -109,6 +109,19 @@ pub async fn agent_assignment_history<S: OrgStore>(
     Ok(rows.iter().map(AssignmentDto::from).collect())
 }
 
+/// Agent assignments for a unit as of a date (default today).
+pub async fn unit_assignments_as_of<S: OrgStore>(
+    store: &S,
+    unit_id: EntityId,
+    as_of: Option<NaiveDate>,
+    principal: &Principal,
+) -> Result<Vec<AssignmentDto>, AppError> {
+    permissions::require(principal, permissions::Permission::AssignmentRead)?;
+    let date = as_of.unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let rows = store.assignments_for_unit_as_of(unit_id, date).await?;
+    Ok(rows.iter().map(AssignmentDto::from).collect())
+}
+
 /// Transfer history, optionally filtered by agent.
 pub async fn transfer_history<S: OrgStore>(
     store: &S,

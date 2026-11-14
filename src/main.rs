@@ -72,9 +72,17 @@ async fn main() -> anyhow::Result<()> {
                     url.clone(),
                 ),
             )
-        } else {
+        } else if config.environment.eq_ignore_ascii_case("local")
+            && config.auth_mode == iaop_agency_service_infrastructure::config::AuthMode::DevBypass
+        {
+            tracing::warn!("using DevAgentValidator in Local/DevBypass mode");
             iaop_agency_service_infrastructure::agent_validation::AgentValidatorImpl::Dev(
                 iaop_agency_service_infrastructure::agent_validation::DevAgentValidator,
+            )
+        } else {
+            tracing::warn!("AGENT_SERVICE_URL unset; using FailClosedAgentValidator");
+            iaop_agency_service_infrastructure::agent_validation::AgentValidatorImpl::FailClosed(
+                iaop_agency_service_infrastructure::agent_validation::FailClosedAgentValidator,
             )
         };
 

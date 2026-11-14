@@ -78,10 +78,22 @@ impl AgentValidationPort for DevAgentValidator {
     }
 }
 
-/// Dispatcher selecting either HTTP or Dev validator.
+/// Fail-closed validator for production safety when upstream registry is unconfigured.
+pub struct FailClosedAgentValidator;
+
+impl AgentValidationPort for FailClosedAgentValidator {
+    async fn validate_agent_active(&self, _agent_id: EntityId) -> Result<(), AppError> {
+        Err(AppError::ServiceUnavailable(
+            "Agent Service URL not configured; agent validation failed closed".into(),
+        ))
+    }
+}
+
+/// Dispatcher selecting either HTTP, Dev, or FailClosed validator.
 pub enum AgentValidatorImpl {
     Http(HttpAgentValidator),
     Dev(DevAgentValidator),
+    FailClosed(FailClosedAgentValidator),
 }
 
 impl AgentValidationPort for AgentValidatorImpl {
@@ -89,6 +101,7 @@ impl AgentValidationPort for AgentValidatorImpl {
         match self {
             Self::Http(v) => v.validate_agent_active(agent_id).await,
             Self::Dev(v) => v.validate_agent_active(agent_id).await,
+            Self::FailClosed(v) => v.validate_agent_active(agent_id).await,
         }
     }
 }

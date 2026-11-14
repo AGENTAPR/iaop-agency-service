@@ -538,6 +538,25 @@ impl OrgStore for PgOrgStoreWithPool {
         Ok(rows.iter().map(assignment_row).collect())
     }
 
+    async fn assignments_for_unit_as_of(
+        &self,
+        unit_id: EntityId,
+        as_of: NaiveDate,
+    ) -> Result<Vec<Assignment>, AppError> {
+        let rows = sqlx::query(
+            "SELECT * FROM agent_assignments
+             WHERE unit_id=$1 AND status <> 'CANCELLED'
+               AND effective_from <= $2
+               AND (effective_to IS NULL OR effective_to > $2)",
+        )
+        .bind(eid(unit_id))
+        .bind(as_of)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.iter().map(assignment_row).collect())
+    }
+
     async fn assignments_for_agent(&self, agent_id: EntityId) -> Result<Vec<Assignment>, AppError> {
         let rows = sqlx::query(
             "SELECT * FROM agent_assignments WHERE agent_id=$1 ORDER BY effective_from",
