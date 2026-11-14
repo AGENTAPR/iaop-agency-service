@@ -82,6 +82,7 @@ impl TokenValidator for JwksTokenValidator {
 pub struct DevBypassValidator;
 
 /// Selects the active token validator implementation.
+#[allow(clippy::large_enum_variant)]
 pub enum TokenValidatorImpl {
     Jwks(JwksTokenValidator),
     Dev(DevBypassValidator),
