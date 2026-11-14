@@ -20,3 +20,4 @@ sqlx.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 jsonwebtoken = "9"
 iaop-security.workspace = true
+rskafka.workspace = true

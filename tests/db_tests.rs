@@ -40,9 +40,17 @@ fn principal() -> Principal {
     }
 }
 
-async fn pool() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    Some(PgPool::connect(&url).await.expect("connect"))
+async fn pool() -> PgPool {
+    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:340ce6f29651795482a97e89a2dd36b6f9336f60ef2ed6c4@127.0.0.1:5432/agency_db".into()
+    });
+    let pool = PgPool::connect(&url)
+        .await
+        .expect("failed to connect to agency_db");
+    iaop_agency_service_infrastructure::persistence::run_migrations(&pool)
+        .await
+        .expect("failed to run migrations");
+    pool
 }
 
 fn store(pool: &PgPool) -> PgOrgStoreWithPool {
@@ -104,7 +112,7 @@ async fn mk_unit(
 
 #[tokio::test]
 async fn agency_crud_and_unique_code() {
-    let Some(pool) = pool().await else { return };
+    let pool = pool().await;
     let code = format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]);
     let id = mk_agency(&pool, &code).await;
     let store = store(&pool);
@@ -130,7 +138,7 @@ async fn agency_crud_and_unique_code() {
 
 #[tokio::test]
 async fn outbox_and_audit_written_atomically() {
-    let Some(pool) = pool().await else { return };
+    let pool = pool().await;
     let code = format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]);
     let id = mk_agency(&pool, &code).await;
     let n: i64 = sqlx::query_scalar(
@@ -155,7 +163,7 @@ async fn outbox_and_audit_written_atomically() {
 
 #[tokio::test]
 async fn hierarchy_ancestors_descendants_and_cycle_rejection() {
-    let Some(pool) = pool().await else { return };
+    let pool = pool().await;
     let ag = mk_agency(
         &pool,
         &format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]),
@@ -221,7 +229,7 @@ async fn hierarchy_ancestors_descendants_and_cycle_rejection() {
 
 #[tokio::test]
 async fn temporal_hierarchy_as_of() {
-    let Some(pool) = pool().await else { return };
+    let pool = pool().await;
     let ag = mk_agency(
         &pool,
         &format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]),
@@ -266,7 +274,7 @@ async fn temporal_hierarchy_as_of() {
 
 #[tokio::test]
 async fn assignment_overlap_rejected_and_transfer_preserves_history() {
-    let Some(pool) = pool().await else { return };
+    let pool = pool().await;
     let ag = mk_agency(
         &pool,
         &format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]),
@@ -356,7 +364,7 @@ async fn assignment_overlap_rejected_and_transfer_preserves_history() {
 
 #[tokio::test]
 async fn concurrent_reparent_one_wins_or_both_valid() {
-    let Some(pool) = pool().await else { return };
+    let pool = pool().await;
     let ag = mk_agency(
         &pool,
         &format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]),
@@ -422,7 +430,7 @@ async fn concurrent_reparent_one_wins_or_both_valid() {
 
 #[tokio::test]
 async fn idempotency_replay_and_conflict() {
-    let Some(pool) = pool().await else { return };
+    let pool = pool().await;
     let idem = PgIdempotencyStore::new();
     let mut tx = pool.begin().await.unwrap();
     let fp = "fingerprint-1";
@@ -469,7 +477,7 @@ async fn idempotency_replay_and_conflict() {
 
 #[tokio::test]
 async fn leadership_assign_end_and_duplicate_role_rejected() {
-    let Some(pool) = pool().await else { return };
+    let pool = pool().await;
     let ag = mk_agency(
         &pool,
         &format!("AG{}", &Uuid::now_v7().simple().to_string()[20..28]),
@@ -547,4 +555,119 @@ async fn leadership_assign_end_and_duplicate_role_rejected() {
     .unwrap();
     tx.commit().await.unwrap();
     assert_ne!(dto2.id, dto.id);
+}
+
+#[tokio::test]
+async fn outbox_lease_claiming_fenced_completion_and_poison_handling() {
+    use iaop_agency_service_infrastructure::outbox::{claim_batch, mark_published, mark_retry};
+
+    let pool = pool().await;
+    let event_id = Uuid::now_v7();
+
+    // Insert an unpublished test event
+    sqlx::query(
+        r#"
+        INSERT INTO outbox_events (event_id, aggregate_id, event_type, event_version, payload, occurred_at)
+        VALUES ($1, $1, 'test.event.v1', 1, '{"test": true}', now())
+        "#,
+    )
+    .bind(event_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let instance_a = "worker-instance-a";
+    let instance_b = "worker-instance-b";
+
+    // 1. Worker A claims the batch
+    let mut tx_a1 = pool.begin().await.unwrap();
+    let batch = claim_batch(&mut tx_a1, instance_a, 30, 1000).await.unwrap();
+    tx_a1.commit().await.unwrap();
+    assert!(batch.iter().any(|r| r.event_id == event_id));
+
+    // 2. Fencing: Worker B attempting to complete Worker A's lease must fail
+    let mut tx_b = pool.begin().await.unwrap();
+    let published_by_b = mark_published(&mut tx_b, event_id, instance_b)
+        .await
+        .unwrap();
+    tx_b.commit().await.unwrap();
+    assert!(
+        !published_by_b,
+        "Worker B must not complete Worker A's lease"
+    );
+
+    // 3. Worker A completes successfully
+    let mut tx_a2 = pool.begin().await.unwrap();
+    let published_by_a = mark_published(&mut tx_a2, event_id, instance_a)
+        .await
+        .unwrap();
+    tx_a2.commit().await.unwrap();
+    assert!(published_by_a, "Worker A holding lease must succeed");
+
+    // Verify event is now published
+    let is_published: bool = sqlx::query_scalar(
+        "SELECT published_at IS NOT NULL FROM outbox_events WHERE event_id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(is_published);
+
+    // 4. Poison handling: insert event with 4 previous attempts
+    let poison_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO outbox_events (event_id, aggregate_id, event_type, event_version, payload, occurred_at, publish_attempts)
+        VALUES ($1, $1, 'poison.event.v1', 1, '{"poison": true}', now(), 4)
+        "#,
+    )
+    .bind(poison_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Claim poison event
+    let mut tx_p1 = pool.begin().await.unwrap();
+    let poison_batch = claim_batch(&mut tx_p1, instance_a, 30, 1000).await.unwrap();
+    tx_p1.commit().await.unwrap();
+    assert!(poison_batch.iter().any(|r| r.event_id == poison_id));
+
+    // Mark retry (5th attempt hits max_attempts = 5 -> terminal)
+    let mut tx_p2 = pool.begin().await.unwrap();
+    let retried = mark_retry(
+        &mut tx_p2,
+        poison_id,
+        instance_a,
+        5,
+        5,
+        "permanent Kafka serialization failure",
+    )
+    .await
+    .unwrap();
+    tx_p2.commit().await.unwrap();
+    assert!(retried);
+
+    // Verify is_terminal is true and next_attempt_at is NULL
+    let (is_term, next_attempt): (bool, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+        "SELECT is_terminal, next_attempt_at FROM outbox_events WHERE event_id = $1",
+    )
+    .bind(poison_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(is_term, "Poison event must be marked terminal");
+    assert!(
+        next_attempt.is_none(),
+        "Terminal poison event must not have next_attempt_at set"
+    );
+
+    // Terminal event must not be claimed by subsequent claim_batch
+    let mut tx_p3 = pool.begin().await.unwrap();
+    let fresh_batch = claim_batch(&mut tx_p3, instance_b, 30, 1000).await.unwrap();
+    tx_p3.commit().await.unwrap();
+    assert!(
+        !fresh_batch.iter().any(|r| r.event_id == poison_id),
+        "Terminal events must never be re-leased"
+    );
 }

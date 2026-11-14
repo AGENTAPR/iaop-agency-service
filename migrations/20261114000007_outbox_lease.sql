@@ -3,6 +3,7 @@
 -- locked_by: identifier of the publisher instance currently holding the lease
 
 ALTER TABLE outbox_events
+    ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS locked_by    TEXT;
 
