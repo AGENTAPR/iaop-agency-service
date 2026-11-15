@@ -68,8 +68,11 @@ async fn main() -> anyhow::Result<()> {
 
         let agent_validator = if let Some(url) = &config.agent_service_url {
             iaop_agency_service_infrastructure::agent_validation::AgentValidatorImpl::Http(
-                iaop_agency_service_infrastructure::agent_validation::HttpAgentValidator::new(
+                iaop_agency_service_infrastructure::agent_validation::HttpAgentValidator::with_credentials(
                     url.clone(),
+                    config.oidc_issuer.clone(),
+                    config.agent_service_client_id.clone(),
+                    config.agent_service_client_secret.clone(),
                 ),
             )
         } else if config.environment.eq_ignore_ascii_case("local")

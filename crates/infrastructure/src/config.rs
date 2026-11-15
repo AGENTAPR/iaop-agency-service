@@ -66,6 +66,11 @@ pub struct AppConfig {
 
     // -- cross-service integrations -------------------------------------
     pub agent_service_url: Option<String>,
+    /// Service-account credentials used to call Agent Service
+    /// (client_credentials grant). Optional; when absent the validator
+    /// sends no token and Agent Service will deny the call (fail closed).
+    pub agent_service_client_id: Option<String>,
+    pub agent_service_client_secret: Option<String>,
 
     // -- events ---------------------------------------------------------
     pub event_transport: EventTransportKind,
@@ -158,6 +163,12 @@ impl AppConfig {
                 .filter(|s| !s.is_empty()),
             activation_mode,
             agent_service_url: std::env::var("AGENT_SERVICE_URL")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            agent_service_client_id: std::env::var("AGENT_SERVICE_CLIENT_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            agent_service_client_secret: std::env::var("AGENT_SERVICE_CLIENT_SECRET")
                 .ok()
                 .filter(|s| !s.is_empty()),
             event_transport,
