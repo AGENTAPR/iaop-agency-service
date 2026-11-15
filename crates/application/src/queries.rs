@@ -191,6 +191,20 @@ pub async fn agent_assignments_as_of<S: OrgStore>(
     Ok(filtered)
 }
 
+/// The agent's single current PRIMARY + ACTIVE assignment as of today.
+/// Returns `NotFound` when the agent has no current primary assignment.
+/// Authorization is identical to `agent_assignments_as_of`.
+pub async fn agent_current_assignment<S: OrgStore>(
+    store: &S,
+    agent_id: EntityId,
+    principal: &Principal,
+) -> Result<AssignmentDto, AppError> {
+    let rows = agent_assignments_as_of(store, agent_id, None, principal).await?;
+    rows.into_iter()
+        .find(|a| a.assignment_type == "PRIMARY" && a.status == "ACTIVE")
+        .ok_or_else(|| AppError::NotFound("agent has no current primary assignment".into()))
+}
+
 /// Full assignment history for an agent.
 pub async fn agent_assignment_history<S: OrgStore>(
     store: &S,

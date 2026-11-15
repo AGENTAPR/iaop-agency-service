@@ -699,7 +699,7 @@ pub(crate) async fn agent_current_assignment(
         Ok(s) => s,
         Err(r) => return r,
     };
-    match queries::agent_assignments_as_of(store, agent_id, None, &p).await {
+    match queries::agent_current_assignment(store, agent_id, &p).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => respond(e),
     }
