@@ -561,3 +561,139 @@ pub async fn end_leader<S: OrgStore>(
     }).await?;
     Ok(LeadershipDto::from(&a))
 }
+
+// ---- lifecycle transitions ----
+
+/// Approved agency lifecycle actions. Mirrors the domain state machine:
+/// ACTIVE -> SUSPENDED -> ACTIVE, any non-TERMINATED -> TERMINATED.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgencyLifecycleAction {
+    Suspend,
+    Reinstate,
+    Terminate,
+}
+
+#[derive(Debug, Clone)]
+pub struct TransitionAgency {
+    pub agency_id: EntityId,
+    pub action: AgencyLifecycleAction,
+    pub expected_version: i64,
+    pub principal: Principal,
+}
+
+/// Transitions an agency's lifecycle status. Global write scope required
+/// (platform administration), optimistic concurrency via `expected_version`.
+/// Does NOT cascade: terminating an agency leaves units, assignments,
+/// leadership, and history untouched — consumers filter by status.
+pub async fn transition_agency<S: OrgStore>(
+    store: &S,
+    tx: &mut Tx<'_>,
+    cmd: TransitionAgency,
+) -> Result<AgencyDto, AppError> {
+    permissions::require(&cmd.principal, permissions::Permission::AgencyUpdate)?;
+    authz::require_global(store, &cmd.principal).await?;
+    let mut agency = store
+        .get_agency(cmd.agency_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("entity".into()))?;
+    if agency.version != cmd.expected_version {
+        return Err(AppError::PreconditionFailed("version mismatch".into()));
+    }
+    match cmd.action {
+        AgencyLifecycleAction::Suspend => agency.suspend().map_err(AppError::from)?,
+        AgencyLifecycleAction::Reinstate => agency.reinstate().map_err(AppError::from)?,
+        AgencyLifecycleAction::Terminate => agency.terminate().map_err(AppError::from)?,
+    }
+    let action_str = match cmd.action {
+        AgencyLifecycleAction::Suspend => "agency.suspend",
+        AgencyLifecycleAction::Reinstate => "agency.reinstate",
+        AgencyLifecycleAction::Terminate => "agency.terminate",
+    };
+    store
+        .update_agency(tx, &agency, cmd.expected_version)
+        .await?;
+    emit(
+        store,
+        tx,
+        Emit {
+            event_type: "agency.status-changed.v1",
+            aggregate_type: "Agency",
+            aggregate_id: agency.id,
+            aggregate_version: Some(agency.version),
+            payload: serde_json::json!({
+                "agency_id": agency.id,
+                "status": format!("{:?}", agency.status).to_uppercase(),
+            }),
+            principal: cmd.principal.clone(),
+            action: action_str,
+            effective_date: None,
+        },
+    )
+    .await?;
+    Ok(AgencyDto::from(&agency))
+}
+
+/// Approved unit lifecycle actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitLifecycleAction {
+    Activate,
+    Deactivate,
+}
+
+#[derive(Debug, Clone)]
+pub struct TransitionUnit {
+    pub unit_id: EntityId,
+    pub action: UnitLifecycleAction,
+    pub expected_version: i64,
+    pub principal: Principal,
+}
+
+/// Activates or deactivates an organizational unit. Requires hierarchy-manage
+/// permission and scope over the unit; optimistic concurrency via
+/// `expected_version`. Deactivation does not reparent, unassign, or delete
+/// anything — existing relationships and history are preserved.
+pub async fn transition_unit<S: OrgStore>(
+    store: &S,
+    tx: &mut Tx<'_>,
+    cmd: TransitionUnit,
+) -> Result<UnitDto, AppError> {
+    permissions::require(&cmd.principal, permissions::Permission::HierarchyManage)?;
+    authz::require_unit_scope(store, &cmd.principal, cmd.unit_id).await?;
+    let mut unit = store
+        .get_unit(cmd.unit_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("entity".into()))?;
+    if unit.version != cmd.expected_version {
+        return Err(AppError::PreconditionFailed("version mismatch".into()));
+    }
+    match cmd.action {
+        UnitLifecycleAction::Activate => unit.activate().map_err(AppError::from)?,
+        UnitLifecycleAction::Deactivate => unit.deactivate().map_err(AppError::from)?,
+    }
+    let action_str = match cmd.action {
+        UnitLifecycleAction::Activate => "org_unit.activate",
+        UnitLifecycleAction::Deactivate => "org_unit.deactivate",
+    };
+    let parent = store.current_parent(unit.id).await?;
+    store.update_unit(tx, &unit, cmd.expected_version).await?;
+    emit(
+        store,
+        tx,
+        Emit {
+            event_type: "agency.unit-status-changed.v1",
+            aggregate_type: "OrgUnit",
+            aggregate_id: unit.id,
+            aggregate_version: Some(unit.version),
+            payload: serde_json::json!({
+                "unit_id": unit.id,
+                "agency_id": unit.agency_id,
+                "status": format!("{:?}", unit.status).to_uppercase(),
+            }),
+            principal: cmd.principal.clone(),
+            action: action_str,
+            effective_date: None,
+        },
+    )
+    .await?;
+    Ok(UnitDto::from((&unit, parent)))
+}
