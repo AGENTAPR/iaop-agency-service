@@ -43,7 +43,8 @@ fn principal() -> Principal {
 }
 
 async fn pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set — no credentials are embedded in source");
+    let url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set — no credentials are embedded in source");
     let pool = PgPool::connect(&url)
         .await
         .expect("failed to connect to agency_db");
