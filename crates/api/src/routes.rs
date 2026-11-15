@@ -244,20 +244,20 @@ fn respond(e: AppError) -> Response {
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
-struct ListQuery {
+pub struct ListQuery {
     limit: Option<u32>,
     cursor: Option<Uuid>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
-struct AsOfQuery {
+pub struct AsOfQuery {
     as_of: Option<NaiveDate>,
 }
 
 // ---- agencies ----
 
 #[derive(Deserialize, serde::Serialize, utoipa::ToSchema)]
-struct CreateAgencyBody {
+pub struct CreateAgencyBody {
     code: String,
     name: String,
 }
@@ -357,7 +357,7 @@ pub(crate) async fn get_agency(
 // ---- org units ----
 
 #[derive(Deserialize, serde::Serialize, utoipa::ToSchema)]
-struct CreateUnitBody {
+pub struct CreateUnitBody {
     agency_id: String,
     code: String,
     name: String,
@@ -480,7 +480,7 @@ pub(crate) async fn get_unit(
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
-struct ChangeParentBody {
+pub struct ChangeParentBody {
     new_parent_id: Option<String>,
     effective_from: NaiveDate,
     expected_version: i64,
@@ -579,7 +579,7 @@ pub(crate) async fn get_descendants(
 // ---- assignments ----
 
 #[derive(Deserialize, serde::Serialize, utoipa::ToSchema)]
-struct AssignBody {
+pub struct AssignBody {
     agent_id: String,
     unit_id: String,
     assignment_type: Option<String>,
@@ -729,7 +729,7 @@ pub(crate) async fn unit_assignments(
 // ---- transfers ----
 
 #[derive(Deserialize, serde::Serialize, utoipa::ToSchema)]
-struct TransferBody {
+pub struct TransferBody {
     agent_id: String,
     to_unit_id: String,
     effective_from: NaiveDate,
@@ -829,7 +829,7 @@ pub(crate) async fn list_transfers(
 // ---- leadership ----
 
 #[derive(Deserialize, serde::Serialize, utoipa::ToSchema)]
-struct AssignLeaderBody {
+pub struct AssignLeaderBody {
     unit_id: String,
     agent_id: String,
     role: String,
@@ -912,7 +912,7 @@ pub(crate) async fn assign_leader_route(
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
-struct EndLeaderBody {
+pub struct EndLeaderBody {
     effective_to: NaiveDate,
     expected_version: i64,
 }

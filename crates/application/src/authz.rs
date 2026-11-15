@@ -49,6 +49,7 @@ pub fn is_global_writer(principal: &Principal) -> bool {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)] // Scoped carries resolved scope sets; boxing adds churn for no hot-path gain.
 pub enum OrgScope {
     /// Global (staff): unrestricted access to all agencies and units.
     Global,
