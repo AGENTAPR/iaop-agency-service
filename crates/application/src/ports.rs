@@ -259,6 +259,18 @@ pub trait EventTransport: Send + Sync {
 /// Authoritative validation port for cross-service Agent checks against Agent Registry.
 pub trait AgentValidationPort: Send + Sync {
     async fn validate_agent_active(&self, agent_id: EntityId) -> Result<(), AppError>;
+
+    /// Resolve the Agent Registry ID linked to an external identity
+    /// (`issuer` + `subject` pair from a validated token). Returns `None`
+    /// when no ACTIVE link exists. The default implementation resolves
+    /// nothing — callers then fail closed downstream.
+    async fn resolve_agent_identity(
+        &self,
+        _issuer: &str,
+        _subject: &str,
+    ) -> Result<Option<EntityId>, AppError> {
+        Ok(None)
+    }
 }
 
 /// No-op agent validator for standalone testing and non-integrated local dev.
