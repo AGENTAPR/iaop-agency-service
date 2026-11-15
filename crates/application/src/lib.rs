@@ -2,6 +2,7 @@
 #![allow(async_fn_in_trait)]
 //! Application layer for Agency Service: commands, queries, ports.
 
+pub mod authz;
 pub mod commands;
 pub mod error;
 pub mod permissions;

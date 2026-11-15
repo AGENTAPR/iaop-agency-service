@@ -28,6 +28,7 @@ fn principal() -> Principal {
         issuer: "test".into(),
         scopes: vec![],
         roles: vec![
+            "IAOP_AGENCY_ADMIN".into(),
             "agency:create".into(),
             "agency:read".into(),
             "agency:update".into(),
@@ -669,5 +670,159 @@ async fn outbox_lease_claiming_fenced_completion_and_poison_handling() {
     assert!(
         !fresh_batch.iter().any(|r| r.event_id == poison_id),
         "Terminal events must never be re-leased"
+    );
+}
+
+#[tokio::test]
+async fn resource_authz_negative_tests() {
+    let pool = pool().await;
+    let store = store(&pool);
+
+    // 1. Setup Agency 1 + Unit 1, and Agency 2 + Unit 2
+    let agency_1 = mk_agency(&pool, "AG-AUTHZ-1").await;
+    let unit_1 = mk_unit(&pool, agency_1, "U1", UnitKind::Region, None, "2026-01-01").await;
+
+    let agency_2 = mk_agency(&pool, "AG-AUTHZ-2").await;
+    let unit_2 = mk_unit(&pool, agency_2, "U2", UnitKind::Region, None, "2026-01-01").await;
+
+    let agent_a = EntityId::new();
+    let agent_b = EntityId::new();
+
+    // Assign Agent A -> Unit 1 (Active)
+    let mut tx = pool.begin().await.unwrap();
+    let mut assign_a = iaop_agency_service_domain::assignment::Assignment::create(
+        agent_a,
+        unit_1,
+        iaop_agency_service_domain::assignment::AssignmentType::Primary,
+        d("2026-01-01"),
+    )
+    .unwrap();
+    assign_a.activate(d("2026-01-01")).unwrap();
+    store.insert_assignment(&mut tx, &assign_a).await.unwrap();
+    tx.commit().await.unwrap();
+
+    // Assign Agent B -> Unit 2 (Active)
+    let mut tx2 = pool.begin().await.unwrap();
+    let mut assign_b = iaop_agency_service_domain::assignment::Assignment::create(
+        agent_b,
+        unit_2,
+        iaop_agency_service_domain::assignment::AssignmentType::Primary,
+        d("2026-01-01"),
+    )
+    .unwrap();
+    assign_b.activate(d("2026-01-01")).unwrap();
+    store.insert_assignment(&mut tx2, &assign_b).await.unwrap();
+    tx2.commit().await.unwrap();
+
+    // Principal for Agent A (non-staff, has agent:read & agency:read)
+    let principal_a = Principal {
+        subject: agent_a.to_string(),
+        issuer: "test".into(),
+        scopes: vec![],
+        roles: vec![
+            "agency:read".into(),
+            "agency:assignment:read".into(),
+            "agency:transfer:request".into(),
+        ],
+        agent_scope: Some(agent_a.to_string()),
+    };
+
+    // Principal for Agent B
+    let principal_b = Principal {
+        subject: agent_b.to_string(),
+        issuer: "test".into(),
+        scopes: vec![],
+        roles: vec![
+            "agency:read".into(),
+            "agency:assignment:read".into(),
+            "agency:transfer:request".into(),
+        ],
+        agent_scope: Some(agent_b.to_string()),
+    };
+
+    // A. Agent A can read Agency 1 and Unit 1 (own scope)
+    let res_agency_1 = iaop_agency_service_application::queries::get_agency(&store, agency_1, &principal_a).await;
+    assert!(res_agency_1.is_ok(), "Agent A must access own assigned agency");
+
+    let res_unit_1 = iaop_agency_service_application::queries::get_unit(&store, unit_1, &principal_a).await;
+    assert!(res_unit_1.is_ok(), "Agent A must access own assigned unit");
+
+    // B. NEGATIVE: Agent A cannot read Agency 2 or Unit 2 (unrelated scope) -> 403 Forbidden
+    let res_agency_2 = iaop_agency_service_application::queries::get_agency(&store, agency_2, &principal_a).await;
+    assert!(
+        matches!(res_agency_2, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        "Agent A must NOT access unrelated Agency 2"
+    );
+
+    let res_unit_2 = iaop_agency_service_application::queries::get_unit(&store, unit_2, &principal_a).await;
+    assert!(
+        matches!(res_unit_2, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        "Agent A must NOT access unrelated Unit 2"
+    );
+
+    // C. NEGATIVE: Agent A cannot read Agent B's assignments -> 403 Forbidden
+    let res_agent_b_assign = iaop_agency_service_application::queries::agent_assignments_as_of(&store, agent_b, None, &principal_a).await;
+    assert!(
+        matches!(res_agent_b_assign, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        "Agent A must NOT access Agent B assignments"
+    );
+
+    // D. Self-service: Agent A CAN read own assignments
+    let res_agent_a_assign = iaop_agency_service_application::queries::agent_assignments_as_of(&store, agent_a, None, &principal_a).await;
+    assert!(res_agent_a_assign.is_ok(), "Agent A can access own assignments");
+    assert_eq!(res_agent_a_assign.unwrap().len(), 1);
+
+    // E. NEGATIVE: Agent A cannot read Unit 2's assignments
+    let res_unit_2_assign = iaop_agency_service_application::queries::unit_assignments_as_of(&store, unit_2, None, &principal_a).await;
+    assert!(
+        matches!(res_unit_2_assign, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        "Agent A must NOT access Unit 2 assignments"
+    );
+
+    // F. NEGATIVE: Agent A cannot access transfer history of Agent B
+    let res_transfer_b = iaop_agency_service_application::queries::transfer_history(&store, Some(agent_b), 10, &principal_a).await;
+    assert!(
+        matches!(res_transfer_b, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        "Agent A must NOT access transfer history of Agent B"
+    );
+
+    // F2. Positive control: Agent B CAN read own Agency 2 / Unit 2
+    assert!(
+        iaop_agency_service_application::queries::get_agency(&store, agency_2, &principal_b)
+            .await
+            .is_ok(),
+        "Agent B must access own assigned agency"
+    );
+
+    // G. NEGATIVE: Pending or Ended assignment does not grant access
+    let agent_pending = EntityId::new();
+    let mut tx_pend = pool.begin().await.unwrap();
+    let assign_pending = iaop_agency_service_domain::assignment::Assignment {
+        id: EntityId::new(),
+        agent_id: agent_pending,
+        unit_id: unit_1,
+        assignment_type: iaop_agency_service_domain::assignment::AssignmentType::Primary,
+        status: iaop_agency_service_domain::assignment::AssignmentStatus::Pending,
+        effective_from: d("2026-01-01"),
+        effective_to: None,
+        version: 0,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    store.insert_assignment(&mut tx_pend, &assign_pending).await.unwrap();
+    tx_pend.commit().await.unwrap();
+
+    let principal_pending = Principal {
+        subject: agent_pending.to_string(),
+        issuer: "test".into(),
+        scopes: vec![],
+        roles: vec!["agency:read".into()],
+        agent_scope: Some(agent_pending.to_string()),
+    };
+
+    let res_pending_read = iaop_agency_service_application::queries::get_agency(&store, agency_1, &principal_pending).await;
+    assert!(
+        matches!(res_pending_read, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        "Pending assignment must NOT grant organizational access"
     );
 }

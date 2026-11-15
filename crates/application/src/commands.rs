@@ -8,6 +8,7 @@ use iaop_agency_service_domain::assignment::{Assignment, AssignmentType, Transfe
 use iaop_agency_service_domain::entity_id::EntityId;
 use iaop_agency_service_domain::org_unit::{OrgUnit, UnitKind, UnitStatus, would_create_cycle};
 
+use crate::authz;
 use crate::error::AppError;
 use crate::permissions;
 use crate::ports::{
@@ -49,6 +50,7 @@ pub async fn create_agency<S: OrgStore>(
     cmd: CreateAgency,
 ) -> Result<AgencyDto, AppError> {
     permissions::require(&cmd.principal, permissions::Permission::AgencyCreate)?;
+    authz::require_global(store, &cmd.principal).await?;
     if store.get_agency_by_code(&cmd.code).await?.is_some() {
         return Err(AppError::Conflict("agency code already exists".into()));
     }
@@ -111,6 +113,7 @@ pub async fn create_unit<S: OrgStore>(
     cmd: CreateUnit,
 ) -> Result<UnitDto, AppError> {
     permissions::require(&cmd.principal, permissions::Permission::HierarchyManage)?;
+    authz::require_agency_scope(store, &cmd.principal, cmd.agency_id).await?;
     let agency = store
         .get_agency(cmd.agency_id)
         .await?
@@ -159,6 +162,7 @@ pub async fn change_parent<S: OrgStore>(
     cmd: ChangeParent,
 ) -> Result<UnitDto, AppError> {
     permissions::require(&cmd.principal, permissions::Permission::HierarchyManage)?;
+    authz::require_unit_scope(store, &cmd.principal, cmd.unit_id).await?;
     store.lock_relationships(tx).await?;
     let mut unit = store
         .get_unit(cmd.unit_id)
@@ -256,6 +260,7 @@ pub async fn assign_agent_validated<S: OrgStore, V: AgentValidationPort>(
     cmd: AssignAgent,
 ) -> Result<AssignmentDto, AppError> {
     permissions::require(&cmd.principal, permissions::Permission::AssignmentManage)?;
+    authz::require_unit_scope(store, &cmd.principal, cmd.unit_id).await?;
     validator.validate_agent_active(cmd.agent_id).await?;
     let unit = store
         .get_unit(cmd.unit_id)
@@ -318,6 +323,7 @@ pub async fn transfer_agent_validated<S: OrgStore, V: AgentValidationPort>(
     cmd: TransferAgent,
 ) -> Result<(AssignmentDto, Transfer), AppError> {
     permissions::require(&cmd.principal, permissions::Permission::TransferRequest)?;
+    authz::require_unit_scope(store, &cmd.principal, cmd.to_unit_id).await?;
     validator.validate_agent_active(cmd.agent_id).await?;
     let to_unit = store
         .get_unit(cmd.to_unit_id)
@@ -334,6 +340,9 @@ pub async fn transfer_agent_validated<S: OrgStore, V: AgentValidationPort>(
         .into_iter()
         .find(|a| a.assignment_type == AssignmentType::Primary);
     let from_unit = current.as_ref().map(|a| a.unit_id);
+    if let Some(from) = from_unit {
+        authz::require_unit_scope(store, &cmd.principal, from).await?;
+    }
 
     let mut new_assignment = Assignment::create(
         cmd.agent_id,
@@ -476,6 +485,7 @@ pub async fn assign_leader<S: OrgStore>(
     cmd: AssignLeader,
 ) -> Result<LeadershipDto, AppError> {
     permissions::require(&cmd.principal, permissions::Permission::LeadershipManage)?;
+    authz::require_unit_scope(store, &cmd.principal, cmd.unit_id).await?;
     let unit = store
         .get_unit(cmd.unit_id)
         .await?
@@ -531,6 +541,7 @@ pub async fn end_leader<S: OrgStore>(
         .get_leadership(cmd.appointment_id)
         .await?
         .ok_or_else(|| AppError::NotFound("entity".into()))?;
+    authz::require_unit_scope(store, &cmd.principal, a.unit_id).await?;
     if a.version != cmd.expected_version {
         return Err(AppError::PreconditionFailed("version mismatch".into()));
     }

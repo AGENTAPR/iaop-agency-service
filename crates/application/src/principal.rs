@@ -43,6 +43,18 @@ impl Principal {
     pub fn idempotency_scope(&self) -> String {
         format!("{}:{}", self.issuer, self.subject)
     }
+
+    /// Resolves caller's Agent ID exclusively from the `agent_scope` /
+    /// `agent_id` token claim. The token `sub` is an external identity
+    /// (Keycloak user UUID), NOT an agent registry ID — identity linking
+    /// is authoritative in Agent Service and must be propagated via the
+    /// claim. Never fall back to parsing `sub`: that would be a
+    /// confused-deputy risk.
+    pub fn resolved_agent_id(&self) -> Option<iaop_agency_service_domain::entity_id::EntityId> {
+        self.agent_scope
+            .as_deref()
+            .and_then(|s| s.parse::<iaop_agency_service_domain::entity_id::EntityId>().ok())
+    }
 }
 
 /// Serializable principal claims extracted from a validated JWT.
@@ -66,7 +78,7 @@ pub struct TokenClaims {
     pub realm_access: Option<RealmAccess>,
     #[serde(default)]
     pub resource_access: Option<std::collections::HashMap<String, ClientRoles>>,
-    #[serde(default)]
+    #[serde(default, alias = "agent_id")]
     pub agent_scope: Option<String>,
 }
 
