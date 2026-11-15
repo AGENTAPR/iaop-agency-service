@@ -57,12 +57,8 @@ impl HttpAgentValidator {
             .timeout(Duration::from_secs(3))
             .build()
             .unwrap_or_default();
-        let token_url = issuer.map(|i| {
-            format!(
-                "{}/protocol/openid-connect/token",
-                i.trim_end_matches('/')
-            )
-        });
+        let token_url =
+            issuer.map(|i| format!("{}/protocol/openid-connect/token", i.trim_end_matches('/')));
         Self {
             client,
             base_url,
@@ -112,9 +108,10 @@ impl HttpAgentValidator {
                 "service credentials rejected by identity provider".into(),
             ));
         }
-        let body: TokenResponse = resp.json().await.map_err(|e| {
-            AppError::ServiceUnavailable(format!("invalid token response: {e}"))
-        })?;
+        let body: TokenResponse = resp
+            .json()
+            .await
+            .map_err(|e| AppError::ServiceUnavailable(format!("invalid token response: {e}")))?;
         let ttl = body.expires_in.unwrap_or(60).saturating_sub(30).max(1);
         if let Ok(mut guard) = self.cached.lock() {
             *guard = Some(CachedToken {
