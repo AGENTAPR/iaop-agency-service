@@ -162,6 +162,14 @@ use std::time::Duration;
 const IDEM_TTL: Duration = Duration::from_secs(24 * 3600);
 
 /// Reserves an idempotency key inside `tx`. Returns:
+/// Stable request fingerprint for idempotency: SHA-256 hex of the canonical
+/// JSON body. Raw bodies exceed the varchar(128) column for normal payloads.
+fn request_fingerprint<T: serde::Serialize>(body: &T) -> String {
+    use sha2::Digest;
+    let json = serde_json::to_vec(body).unwrap_or_default();
+    hex::encode(sha2::Sha256::digest(&json))
+}
+
 /// - Ok(Some(record_id)) → caller owns key; must `idem_complete` before commit
 /// - Ok(None) → replay: stored response already returned via `replay`
 /// - Err(Response) → conflict or infra failure
@@ -290,7 +298,7 @@ pub(crate) async fn create_agency(
         Ok(t) => t,
         Err(e) => return respond(AppError::infra(e)),
     };
-    let fingerprint = serde_json::to_string(&b).unwrap_or_default();
+    let fingerprint = request_fingerprint(&b);
     let idem = match idem_begin(&state, &mut tx, &p, "agency.create", &headers, &fingerprint).await
     {
         Ok(v) => v,
@@ -382,7 +390,7 @@ pub(crate) async fn create_unit(
         Ok(s) => s,
         Err(r) => return r,
     };
-    let fingerprint = serde_json::to_string(&b).unwrap_or_default();
+    let fingerprint = request_fingerprint(&b);
     let agency_id = match parse_id(&b.agency_id) {
         Ok(i) => i,
         Err(r) => return r,
@@ -602,7 +610,7 @@ pub(crate) async fn assign_agent(
         Ok(s) => s,
         Err(r) => return r,
     };
-    let fingerprint = serde_json::to_string(&b).unwrap_or_default();
+    let fingerprint = request_fingerprint(&b);
     let agent_id = match parse_id(&b.agent_id) {
         Ok(i) => i,
         Err(r) => return r,
@@ -752,7 +760,7 @@ pub(crate) async fn transfer_agent(
         Ok(s) => s,
         Err(r) => return r,
     };
-    let fingerprint = serde_json::to_string(&b).unwrap_or_default();
+    let fingerprint = request_fingerprint(&b);
     let agent_id = match parse_id(&b.agent_id) {
         Ok(i) => i,
         Err(r) => return r,
@@ -866,7 +874,7 @@ pub(crate) async fn assign_leader_route(
             Some(r) => r,
             None => return respond(AppError::Validation("invalid role".into())),
         };
-    let fingerprint = serde_json::to_string(&b).unwrap_or_default();
+    let fingerprint = request_fingerprint(&b);
     let pool = match state.db.as_ref() {
         Some(p) => p.clone(),
         None => {

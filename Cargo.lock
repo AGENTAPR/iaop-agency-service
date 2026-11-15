@@ -811,11 +811,13 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
+ "hex",
  "iaop_agency_service-application",
  "iaop_agency_service-domain",
  "iaop_agency_service-infrastructure",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "tower",
