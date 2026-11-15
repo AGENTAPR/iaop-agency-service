@@ -141,10 +141,7 @@ pub async fn resolve_scope<S: OrgStore>(
 // command's effective date: a caller must hold organizational scope NOW.
 
 /// Staff-only guard for top-level administrative creation (e.g. new agency).
-pub async fn require_global<S: OrgStore>(
-    store: &S,
-    principal: &Principal,
-) -> Result<(), AppError> {
+pub async fn require_global<S: OrgStore>(store: &S, principal: &Principal) -> Result<(), AppError> {
     let today = chrono::Utc::now().date_naive();
     match resolve_scope(store, principal, today).await? {
         OrgScope::Global => Ok(()),

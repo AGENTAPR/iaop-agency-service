@@ -742,48 +742,97 @@ async fn resource_authz_negative_tests() {
     };
 
     // A. Agent A can read Agency 1 and Unit 1 (own scope)
-    let res_agency_1 = iaop_agency_service_application::queries::get_agency(&store, agency_1, &principal_a).await;
-    assert!(res_agency_1.is_ok(), "Agent A must access own assigned agency");
+    let res_agency_1 =
+        iaop_agency_service_application::queries::get_agency(&store, agency_1, &principal_a).await;
+    assert!(
+        res_agency_1.is_ok(),
+        "Agent A must access own assigned agency"
+    );
 
-    let res_unit_1 = iaop_agency_service_application::queries::get_unit(&store, unit_1, &principal_a).await;
+    let res_unit_1 =
+        iaop_agency_service_application::queries::get_unit(&store, unit_1, &principal_a).await;
     assert!(res_unit_1.is_ok(), "Agent A must access own assigned unit");
 
     // B. NEGATIVE: Agent A cannot read Agency 2 or Unit 2 (unrelated scope) -> 403 Forbidden
-    let res_agency_2 = iaop_agency_service_application::queries::get_agency(&store, agency_2, &principal_a).await;
+    let res_agency_2 =
+        iaop_agency_service_application::queries::get_agency(&store, agency_2, &principal_a).await;
     assert!(
-        matches!(res_agency_2, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        matches!(
+            res_agency_2,
+            Err(iaop_agency_service_application::AppError::Forbidden(_))
+        ),
         "Agent A must NOT access unrelated Agency 2"
     );
 
-    let res_unit_2 = iaop_agency_service_application::queries::get_unit(&store, unit_2, &principal_a).await;
+    let res_unit_2 =
+        iaop_agency_service_application::queries::get_unit(&store, unit_2, &principal_a).await;
     assert!(
-        matches!(res_unit_2, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        matches!(
+            res_unit_2,
+            Err(iaop_agency_service_application::AppError::Forbidden(_))
+        ),
         "Agent A must NOT access unrelated Unit 2"
     );
 
     // C. NEGATIVE: Agent A cannot read Agent B's assignments -> 403 Forbidden
-    let res_agent_b_assign = iaop_agency_service_application::queries::agent_assignments_as_of(&store, agent_b, None, &principal_a).await;
+    let res_agent_b_assign = iaop_agency_service_application::queries::agent_assignments_as_of(
+        &store,
+        agent_b,
+        None,
+        &principal_a,
+    )
+    .await;
     assert!(
-        matches!(res_agent_b_assign, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        matches!(
+            res_agent_b_assign,
+            Err(iaop_agency_service_application::AppError::Forbidden(_))
+        ),
         "Agent A must NOT access Agent B assignments"
     );
 
     // D. Self-service: Agent A CAN read own assignments
-    let res_agent_a_assign = iaop_agency_service_application::queries::agent_assignments_as_of(&store, agent_a, None, &principal_a).await;
-    assert!(res_agent_a_assign.is_ok(), "Agent A can access own assignments");
+    let res_agent_a_assign = iaop_agency_service_application::queries::agent_assignments_as_of(
+        &store,
+        agent_a,
+        None,
+        &principal_a,
+    )
+    .await;
+    assert!(
+        res_agent_a_assign.is_ok(),
+        "Agent A can access own assignments"
+    );
     assert_eq!(res_agent_a_assign.unwrap().len(), 1);
 
     // E. NEGATIVE: Agent A cannot read Unit 2's assignments
-    let res_unit_2_assign = iaop_agency_service_application::queries::unit_assignments_as_of(&store, unit_2, None, &principal_a).await;
+    let res_unit_2_assign = iaop_agency_service_application::queries::unit_assignments_as_of(
+        &store,
+        unit_2,
+        None,
+        &principal_a,
+    )
+    .await;
     assert!(
-        matches!(res_unit_2_assign, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        matches!(
+            res_unit_2_assign,
+            Err(iaop_agency_service_application::AppError::Forbidden(_))
+        ),
         "Agent A must NOT access Unit 2 assignments"
     );
 
     // F. NEGATIVE: Agent A cannot access transfer history of Agent B
-    let res_transfer_b = iaop_agency_service_application::queries::transfer_history(&store, Some(agent_b), 10, &principal_a).await;
+    let res_transfer_b = iaop_agency_service_application::queries::transfer_history(
+        &store,
+        Some(agent_b),
+        10,
+        &principal_a,
+    )
+    .await;
     assert!(
-        matches!(res_transfer_b, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        matches!(
+            res_transfer_b,
+            Err(iaop_agency_service_application::AppError::Forbidden(_))
+        ),
         "Agent A must NOT access transfer history of Agent B"
     );
 
@@ -810,7 +859,10 @@ async fn resource_authz_negative_tests() {
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
-    store.insert_assignment(&mut tx_pend, &assign_pending).await.unwrap();
+    store
+        .insert_assignment(&mut tx_pend, &assign_pending)
+        .await
+        .unwrap();
     tx_pend.commit().await.unwrap();
 
     let principal_pending = Principal {
@@ -821,9 +873,14 @@ async fn resource_authz_negative_tests() {
         agent_scope: Some(agent_pending.to_string()),
     };
 
-    let res_pending_read = iaop_agency_service_application::queries::get_agency(&store, agency_1, &principal_pending).await;
+    let res_pending_read =
+        iaop_agency_service_application::queries::get_agency(&store, agency_1, &principal_pending)
+            .await;
     assert!(
-        matches!(res_pending_read, Err(iaop_agency_service_application::AppError::Forbidden(_))),
+        matches!(
+            res_pending_read,
+            Err(iaop_agency_service_application::AppError::Forbidden(_))
+        ),
         "Pending assignment must NOT grant organizational access"
     );
 }

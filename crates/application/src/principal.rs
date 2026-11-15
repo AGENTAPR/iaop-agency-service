@@ -51,9 +51,10 @@ impl Principal {
     /// claim. Never fall back to parsing `sub`: that would be a
     /// confused-deputy risk.
     pub fn resolved_agent_id(&self) -> Option<iaop_agency_service_domain::entity_id::EntityId> {
-        self.agent_scope
-            .as_deref()
-            .and_then(|s| s.parse::<iaop_agency_service_domain::entity_id::EntityId>().ok())
+        self.agent_scope.as_deref().and_then(|s| {
+            s.parse::<iaop_agency_service_domain::entity_id::EntityId>()
+                .ok()
+        })
     }
 }
 
