@@ -204,7 +204,7 @@ impl OrgStore for PgOrgStoreWithPool {
         cursor: Option<Uuid>,
     ) -> Result<Vec<Agency>, AppError> {
         let rows = sqlx::query(
-            "SELECT * FROM agencies WHERE ($1::uuid IS NULL OR id > $1)
+            "SELECT * FROM agencies WHERE ($1::uuid IS NULL OR id > $1) AND status = 'ACTIVE'
              ORDER BY id LIMIT $2",
         )
         .bind(cursor)
@@ -526,7 +526,7 @@ impl OrgStore for PgOrgStoreWithPool {
     ) -> Result<Vec<Assignment>, AppError> {
         let rows = sqlx::query(
             "SELECT * FROM agent_assignments
-             WHERE agent_id=$1 AND status <> 'CANCELLED'
+             WHERE agent_id=$1 AND status IN ('ACTIVE','ENDED')
                AND effective_from <= $2
                AND (effective_to IS NULL OR effective_to > $2)",
         )
@@ -545,7 +545,7 @@ impl OrgStore for PgOrgStoreWithPool {
     ) -> Result<Vec<Assignment>, AppError> {
         let rows = sqlx::query(
             "SELECT * FROM agent_assignments
-             WHERE unit_id=$1 AND status <> 'CANCELLED'
+             WHERE unit_id=$1 AND status IN ('ACTIVE','ENDED')
                AND effective_from <= $2
                AND (effective_to IS NULL OR effective_to > $2)",
         )
@@ -709,7 +709,7 @@ impl OrgStore for PgOrgStoreWithPool {
     ) -> Result<Vec<LeadershipAppointment>, AppError> {
         let rows = sqlx::query(
             "SELECT * FROM leadership_appointments
-             WHERE unit_id=$1 AND status <> 'CANCELLED'
+             WHERE unit_id=$1 AND status IN ('ACTIVE','ENDED')
                AND effective_from <= $2 AND (effective_to IS NULL OR effective_to > $2)",
         )
         .bind(eid(unit_id))

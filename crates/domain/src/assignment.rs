@@ -3,6 +3,7 @@
 
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::entity_id::EntityId;
 use crate::error::DomainError;
@@ -14,7 +15,7 @@ pub enum AssignmentType {
     Secondary,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AssignmentStatus {
     Pending,
@@ -116,7 +117,7 @@ impl Assignment {
 }
 
 /// Immutable record of an agent transfer between organizational units.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Transfer {
     pub id: EntityId,
     pub agent_id: EntityId,

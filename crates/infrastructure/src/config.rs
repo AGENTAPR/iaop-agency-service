@@ -66,6 +66,11 @@ pub struct AppConfig {
 
     // -- cross-service integrations -------------------------------------
     pub agent_service_url: Option<String>,
+    /// Service-account credentials used to call Agent Service
+    /// (client_credentials grant). Optional; when absent the validator
+    /// sends no token and Agent Service will deny the call (fail closed).
+    pub agent_service_client_id: Option<String>,
+    pub agent_service_client_secret: Option<String>,
 
     // -- events ---------------------------------------------------------
     pub event_transport: EventTransportKind,
@@ -94,10 +99,12 @@ impl AppConfig {
                 ));
             }
         };
-        if auth_mode == AuthMode::DevBypass && is_production {
-            return Err(ConfigError::UnsafeConfig(
-                "AUTH_MODE=dev is forbidden when ENVIRONMENT=production".into(),
-            ));
+        // Dev auth bypass is ONLY permitted in an explicitly isolated local
+        // environment. Shared DEV/staging/production must use real JWT auth.
+        if auth_mode == AuthMode::DevBypass && !environment.eq_ignore_ascii_case("local") {
+            return Err(ConfigError::UnsafeConfig(format!(
+                "AUTH_MODE=dev is forbidden when ENVIRONMENT={environment} (allowed only for ENVIRONMENT=local)"
+            )));
         }
         if auth_mode == AuthMode::Jwt {
             for var in ["OIDC_ISSUER", "OIDC_JWKS_URL", "OIDC_AUDIENCE"] {
@@ -156,6 +163,12 @@ impl AppConfig {
                 .filter(|s| !s.is_empty()),
             activation_mode,
             agent_service_url: std::env::var("AGENT_SERVICE_URL")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            agent_service_client_id: std::env::var("AGENT_SERVICE_CLIENT_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            agent_service_client_secret: std::env::var("AGENT_SERVICE_CLIENT_SECRET")
                 .ok()
                 .filter(|s| !s.is_empty()),
             event_transport,

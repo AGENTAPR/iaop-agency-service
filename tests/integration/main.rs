@@ -15,7 +15,7 @@ fn test_state() -> AppState {
         for (k, v) in [
             ("SERVICE_NAME", "iaop-agency-service"),
             ("SERVICE_VERSION", "0.1.0"),
-            ("ENVIRONMENT", "test"),
+            ("ENVIRONMENT", "local"),
             ("AUTH_MODE", "dev"),
             ("ACTIVATION_MODE", "fixture"),
             ("BIND_ADDR", "127.0.0.1:0"),
