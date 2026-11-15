@@ -1,7 +1,7 @@
 //! Real-PostgreSQL integration tests for Agency Service.
 //!
 //! Requires DATABASE_URL pointing at a migrated `agency_db`.
-//! Run: DATABASE_URL=postgres://postgres:***@127.0.0.1:5432/agency_db cargo test --test db_tests
+//! Run: DATABASE_URL=postgres://<user>:<password>@127.0.0.1:5432/agency_db cargo test --test db_tests
 //!
 //! Covers: migrations applied, CRUD, temporal hierarchy/assignments,
 //! cycle prevention, overlap rejection, transfers, outbox+audit atomicity,
@@ -43,9 +43,7 @@ fn principal() -> Principal {
 }
 
 async fn pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        "postgres://postgres:340ce6f29651795482a97e89a2dd36b6f9336f60ef2ed6c4@127.0.0.1:5432/agency_db".into()
-    });
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set — no credentials are embedded in source");
     let pool = PgPool::connect(&url)
         .await
         .expect("failed to connect to agency_db");
