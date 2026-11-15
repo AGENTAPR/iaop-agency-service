@@ -28,6 +28,7 @@ fn principal() -> Principal {
         issuer: "test".into(),
         scopes: vec![],
         roles: vec![
+            "IAOP_PLATFORM_ADMIN".into(),
             "IAOP_AGENCY_ADMIN".into(),
             "agency:create".into(),
             "agency:read".into(),
