@@ -231,3 +231,64 @@ Deployed and verified on `iaop-keycloak-dev` (`/data/iaop-dev/compose`).
 Service → Agent Service identity path is now verified live on DEV with a
 real agent; remaining gaps are business-scope decisions and unrun
 non-functional suites, not P0 defects.
+
+---
+
+## Addendum 3 — Scalar portal sync + error-mapping fix (2026-11-15, continued)
+
+### Central Scalar / Developer Portal — VERIFIED
+
+- Portal `iaop-dev-api-docs` (Rust portal in `iaop-api-contracts/portal`)
+  rebuilt from `development@7b38a77`; catalog baked at image build.
+- `GET /api/v1/catalog/backend` (portal session) → Agency Service entry:
+  `sourceCommit=a57afbb3`, `apiVersion=0.2.0`, `verificationStatus=e2e_verified`,
+  `maturity=implemented_verified`, `deploymentStatus=deployed`.
+- `GET /api/v1/services/agency-service/spec` → 307 → canonical
+  `specs/development/agency-service/openapi.json` (17 paths / 20 ops).
+- `GET /reference/backend/agency-service` → 200, Scalar UI loads; spec
+  `servers` rewritten to `https://8083-…instabox.tech/dev-api/agency`.
+- **Route parity**: live `/api/docs/openapi.json` vs canonical spec —
+  20/20 operations identical (0 live-only, 0 canon-only).
+- **Dev testing proxy verified**: `GET /dev-api/agency/api/v1/agents/{id}/current-assignment`
+  - no portal session → 401; portal session only → 401 (upstream problem+json);
+  - portal session + `Authorization: Bearer <iaop-agency-api JWT>` → **200**
+    with live assignment data. Domain API still requires its own audience
+    token — portal session alone is correctly insufficient.
+
+### Kafka / outbox — VERIFIED (live)
+
+- `outbox_events`: 102 rows; `agency.agent-assigned.v1` (created 10:27)
+  `published_at` set after 2 attempts — first attempt hit
+  `UnknownTopicOrPartition` (topic auto-create lag), retry succeeded.
+  Confirms at-least-once outbox + bounded retry + eventual delivery.
+
+### Defect fixed: domain error mapping (P1, PR #23, deployed `ac0d3f3`)
+
+- `respond()` in `crates/api/src/routes.rs` lacked arms for
+  `AppError::Domain`, `AgentNotFound`, `PreconditionFailed` → all fell to
+  `500 INTERNAL`. Reproduced live: invalid unit lifecycle transition
+  returned 500.
+- After fix (live-verified):
+  - invalid transition (ACTIVATE on ACTIVE unit) → **409 CONFLICT**
+  - stale `expected_version` → **412 PRECONDITION_FAILED**
+  - missing `expected_version` → **422** validation
+- Note: `error_mapping.rs` (`ApiError::from(AppError)`) already mapped
+  these correctly; only the legacy `respond()` path was wrong.
+
+### Deployment parity
+
+| Component | Deployed SHA | development HEAD |
+|---|---|---|
+| agency-service | `ac0d3f3` | `ac0d3f3` (code; docs addendum pending) |
+| agent-bff | `fe00193` | `fe00193` |
+| api-docs (portal) | image @ `7b38a77` | `7b38a77` |
+
+### Verdict (updated)
+
+`CONDITIONALLY DEV READY` — all P0 integration items now have live DEV
+evidence (BFF contract, identity resolution, resource authz, runtime
+OpenAPI parity, central Scalar catalog + testing proxy, security
+negatives, outbox delivery). Remaining gaps are P1 business-scope
+(transfer approval `REQUIREMENT_UNRESOLVED`, promotion mapping) and
+unrun non-functional suites (DB concurrency, perf benchmarks, Kafka
+failure-injection matrix).
