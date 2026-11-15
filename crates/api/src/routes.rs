@@ -34,11 +34,16 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/docs/openapi.json", get(openapi_json))
         .route("/api/v1/agencies", post(create_agency).get(list_agencies))
         .route("/api/v1/agencies/{id}", get(get_agency))
+        .route("/api/v1/agencies/{id}/lifecycle", post(transition_agency))
         .route(
             "/api/v1/organization-units",
             post(create_unit).get(list_units),
         )
         .route("/api/v1/organization-units/{id}", get(get_unit))
+        .route(
+            "/api/v1/organization-units/{id}/lifecycle",
+            post(transition_unit),
+        )
         .route(
             "/api/v1/organization-units/{id}/parent",
             axum::routing::patch(change_parent),
@@ -978,6 +983,119 @@ pub(crate) async fn get_leaders(
     };
     match queries::leaders_as_of(store, id, q.as_of, &p).await {
         Ok(v) => Json(v).into_response(),
+        Err(e) => respond(e),
+    }
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct AgencyLifecycleBody {
+    /// SUSPEND | REINSTATE | TERMINATE
+    action: String,
+    expected_version: i64,
+}
+
+#[utoipa::path(post, path = "/api/v1/agencies/{id}/lifecycle", tag = "agency", operation_id = "transitionAgency", summary = "Transition agency lifecycle", description = "Applies an approved agency lifecycle transition (SUSPEND, REINSTATE, TERMINATE). Requires platform-administration global write scope and optimistic concurrency via expected_version. TERMINATED is terminal; no cascade to units, assignments, or leadership.", params(("id" = String, Path, description = "Agency ID")), request_body = AgencyLifecycleBody, responses((status = 200, description = "Agency updated", body = AgencyDto),(status = 400, description = "Malformed request or unknown action", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Invalid transition or version conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn transition_agency(
+    State(state): State<AppState>,
+    AuthPrincipal(p): AuthPrincipal,
+    Path(id): Path<String>,
+    Json(b): Json<AgencyLifecycleBody>,
+) -> Response {
+    let id = match parse_id(&id) {
+        Ok(i) => i,
+        Err(r) => return r,
+    };
+    let action = match b.action.to_uppercase().as_str() {
+        "SUSPEND" => commands::AgencyLifecycleAction::Suspend,
+        "REINSTATE" => commands::AgencyLifecycleAction::Reinstate,
+        "TERMINATE" => commands::AgencyLifecycleAction::Terminate,
+        _ => return respond(AppError::Validation("unknown lifecycle action".into())),
+    };
+    let store = match store(&state) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let cmd = commands::TransitionAgency {
+        agency_id: id,
+        action,
+        expected_version: b.expected_version,
+        principal: p.clone(),
+    };
+    let pool = match state.db.as_ref() {
+        Some(p) => p.clone(),
+        None => {
+            return respond(AppError::ServiceUnavailable(
+                "persistence not configured".into(),
+            ));
+        }
+    };
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return respond(AppError::infra(e)),
+    };
+    match commands::transition_agency(store, &mut tx, cmd).await {
+        Ok(dto) => {
+            if let Err(e) = tx.commit().await {
+                return respond(AppError::infra(e));
+            }
+            Json(dto).into_response()
+        }
+        Err(e) => respond(e),
+    }
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct UnitLifecycleBody {
+    /// ACTIVATE | DEACTIVATE
+    action: String,
+    expected_version: i64,
+}
+
+#[utoipa::path(post, path = "/api/v1/organization-units/{id}/lifecycle", tag = "agency", operation_id = "transitionUnit", summary = "Transition organizational unit lifecycle", description = "Activates or deactivates a unit. Requires hierarchy-manage permission and scope over the unit plus optimistic concurrency via expected_version. Deactivation preserves all relationships, assignments, leadership, and history.", params(("id" = String, Path, description = "Unit ID")), request_body = UnitLifecycleBody, responses((status = 200, description = "Unit updated", body = UnitDto),(status = 400, description = "Malformed request or unknown action", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Invalid transition or version conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn transition_unit(
+    State(state): State<AppState>,
+    AuthPrincipal(p): AuthPrincipal,
+    Path(id): Path<String>,
+    Json(b): Json<UnitLifecycleBody>,
+) -> Response {
+    let id = match parse_id(&id) {
+        Ok(i) => i,
+        Err(r) => return r,
+    };
+    let action = match b.action.to_uppercase().as_str() {
+        "ACTIVATE" => commands::UnitLifecycleAction::Activate,
+        "DEACTIVATE" => commands::UnitLifecycleAction::Deactivate,
+        _ => return respond(AppError::Validation("unknown lifecycle action".into())),
+    };
+    let store = match store(&state) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let cmd = commands::TransitionUnit {
+        unit_id: id,
+        action,
+        expected_version: b.expected_version,
+        principal: p.clone(),
+    };
+    let pool = match state.db.as_ref() {
+        Some(p) => p.clone(),
+        None => {
+            return respond(AppError::ServiceUnavailable(
+                "persistence not configured".into(),
+            ));
+        }
+    };
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return respond(AppError::infra(e)),
+    };
+    match commands::transition_unit(store, &mut tx, cmd).await {
+        Ok(dto) => {
+            if let Err(e) = tx.commit().await {
+                return respond(AppError::infra(e));
+            }
+            Json(dto).into_response()
+        }
         Err(e) => respond(e),
     }
 }

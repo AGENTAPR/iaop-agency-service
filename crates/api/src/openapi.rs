@@ -29,6 +29,8 @@ use crate::routes;
         routes::assign_leader_route,
         routes::end_leader_route,
         routes::get_leaders,
+        routes::transition_agency,
+        routes::transition_unit,
     ),
     components(schemas(
         crate::dto::ProblemDetails,
