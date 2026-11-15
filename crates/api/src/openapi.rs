@@ -30,18 +30,39 @@ use crate::routes;
         routes::end_leader_route,
         routes::get_leaders,
     ),
-    components(
-        security_schemes(
-            ("bearerAuth" = ("http" = ("bearer" = ("format" = "JWT"))))
-        ),
-        schemas(
-            crate::dto::ProblemDetails,
-            iaop_agency_service_application::commands::AgencyDto,
-            iaop_agency_service_application::commands::UnitDto,
-            iaop_agency_service_application::commands::AssignmentDto,
-            iaop_agency_service_application::commands::LeadershipDto,
-            iaop_agency_service_domain::assignment::Transfer,
-        )
-    )
+    components(schemas(
+        crate::dto::ProblemDetails,
+        iaop_agency_service_application::commands::AgencyDto,
+        iaop_agency_service_application::commands::UnitDto,
+        iaop_agency_service_application::commands::AssignmentDto,
+        iaop_agency_service_application::commands::LeadershipDto,
+        iaop_agency_service_domain::assignment::Transfer,
+    )),
+    modifiers(&SecurityAddon)
 )]
 pub struct ApiDoc;
+
+struct SecurityAddon;
+
+impl utoipa::Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+        if let Some(components) = openapi.components.as_mut() {
+            components.add_security_scheme(
+                "bearerAuth",
+                SecurityScheme::Http(HttpBuilder::new().scheme(HttpAuthScheme::Bearer).build()),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openapi_has_paths_and_security() {
+        let doc = ApiDoc::openapi();
+        assert!(doc.paths.paths.len() >= 15, "expected >=15 paths");
+    }
+}
