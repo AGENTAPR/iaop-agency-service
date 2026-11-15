@@ -3,7 +3,10 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
+use uuid::Uuid;
 
 use iaop_agency_service_application::error::AppError;
 use iaop_agency_service_application::ports::AgentValidationPort;
@@ -26,6 +29,13 @@ struct CachedToken {
     expires_at: Instant,
 }
 
+#[derive(Deserialize)]
+struct IdentityLinkResponse {
+    agent_id: Uuid,
+    status: String,
+    unlinked_at: Option<serde_json::Value>,
+}
+
 /// HTTP client calling `iaop-agent-service` to verify agent identity and status.
 ///
 /// Agent Service requires a Bearer token; when service-account credentials
@@ -40,6 +50,9 @@ pub struct HttpAgentValidator {
     client_id: Option<String>,
     client_secret: Option<String>,
     cached: Mutex<Option<CachedToken>>,
+    /// Bounded TTL cache for issuer+subject -> agent identity resolution.
+    /// Identity unlink propagates within IDENTITY_CACHE_TTL seconds.
+    identity_cache: Mutex<HashMap<(String, String), (Option<EntityId>, Instant)>>,
 }
 
 impl HttpAgentValidator {
@@ -66,6 +79,7 @@ impl HttpAgentValidator {
             client_id,
             client_secret,
             cached: Mutex::new(None),
+            identity_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -166,6 +180,68 @@ impl AgentValidationPort for HttpAgentValidator {
 
         Ok(())
     }
+    /// Server-side identity resolution (Option B): maps the caller's own
+    /// (issuer, subject) to an Agent Registry ID via Agent Service
+    /// `GET /api/v1/identity-links/resolve`. Results are cached for 60s;
+    /// revocation propagates within that bound. Transport failures return
+    /// `ServiceUnavailable` — never a fabricated identity.
+    async fn resolve_agent_identity(
+        &self,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<Option<EntityId>, AppError> {
+        const TTL: Duration = Duration::from_secs(60);
+        let key = (issuer.to_string(), subject.to_string());
+        if let Ok(guard) = self.identity_cache.lock() {
+            if let Some((v, exp)) = guard.get(&key) {
+                if Instant::now() < *exp {
+                    return Ok(*v);
+                }
+            }
+        }
+
+        let token = self.service_token().await?;
+        let url = format!("{}/api/v1/identity-links/resolve", self.base_url);
+        let mut req = self
+            .client
+            .get(&url)
+            .query(&[("issuer", issuer), ("subject", subject)]);
+        if let Some(t) = &token {
+            req = req.bearer_auth(t);
+        }
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "identity resolution request failed; failing closed");
+                return Err(AppError::ServiceUnavailable(
+                    "agent registry service unavailable".into(),
+                ));
+            }
+        };
+
+        let resolved = if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            None
+        } else if !resp.status().is_success() {
+            return Err(AppError::ServiceUnavailable(format!(
+                "agent registry returned {} during identity resolution",
+                resp.status()
+            )));
+        } else {
+            let link: IdentityLinkResponse = resp.json().await.map_err(|e| {
+                AppError::ServiceUnavailable(format!("invalid identity-link response: {e}"))
+            })?;
+            if link.status.eq_ignore_ascii_case("ACTIVE") && link.unlinked_at.is_none() {
+                Some(EntityId::from_uuid(link.agent_id))
+            } else {
+                None
+            }
+        };
+
+        if let Ok(mut guard) = self.identity_cache.lock() {
+            guard.insert(key, (resolved, Instant::now() + TTL));
+        }
+        Ok(resolved)
+    }
 }
 
 /// Local development / test fallback validator.
@@ -201,6 +277,18 @@ impl AgentValidationPort for AgentValidatorImpl {
             Self::Http(v) => v.validate_agent_active(agent_id).await,
             Self::Dev(v) => v.validate_agent_active(agent_id).await,
             Self::FailClosed(v) => v.validate_agent_active(agent_id).await,
+        }
+    }
+
+    async fn resolve_agent_identity(
+        &self,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<Option<EntityId>, AppError> {
+        match self {
+            Self::Http(v) => v.resolve_agent_identity(issuer, subject).await,
+            // Dev/fail-closed validators never fabricate an identity.
+            _ => Ok(None),
         }
     }
 }
