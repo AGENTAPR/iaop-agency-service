@@ -805,7 +805,7 @@ async fn resource_authz_negative_tests() {
         status: iaop_agency_service_domain::assignment::AssignmentStatus::Pending,
         effective_from: d("2026-01-01"),
         effective_to: None,
-        version: 0,
+        version: 1,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
