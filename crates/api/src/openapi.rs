@@ -67,4 +67,13 @@ mod tests {
         let doc = ApiDoc::openapi();
         assert!(doc.paths.paths.len() >= 15, "expected >=15 paths");
     }
+
+    /// Deterministic OpenAPI export for contract synchronization:
+    /// `cargo test -p iaop_agency_service-api dump_openapi_spec`
+    /// writes `target/agency_service_openapi.json`.
+    #[test]
+    fn dump_openapi_spec() {
+        let json = ApiDoc::openapi().to_pretty_json().unwrap();
+        std::fs::write("../../target/agency_service_openapi.json", json).unwrap();
+    }
 }
