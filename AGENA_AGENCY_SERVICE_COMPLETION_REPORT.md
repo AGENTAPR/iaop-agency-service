@@ -159,3 +159,75 @@ Base: `development` @ `0805728` (post-merge HEAD). All changes merged via PRs #1
 ## Verdict this pass
 
 `CONDITIONALLY DEV READY` — P0 contract/identity defects fixed and compile+unit verified; deployment and live E2E verification outstanding.
+
+---
+
+## Addendum 2 — InstaBox DEV live verification (2026-11-15)
+
+Deployed and verified on `iaop-keycloak-dev` (`/data/iaop-dev/compose`).
+
+### Source baseline
+
+| Repo | Deployed SHA |
+|---|---|
+| iaop-agency-service | `a57afbb` (incl. PR #21 idempotency fingerprint fix) |
+| iaop-agent-bff | `fe00193` (incl. PR #18 agent client contract fix) |
+| iaop-infrastructure | compose env PR #13 (service-account wiring) |
+
+### Defects found and fixed during live verification
+
+1. **Idempotency fingerprint overflow (P0, new)** — `request_fingerprint`
+   stored raw JSON bodies into `varchar(128)`; any POST body >128 chars
+   returned HTTP 500. Reproduced live, root-caused via PostgreSQL log
+   (`value too long for type character varying(128)`). Fixed by storing
+   SHA-256 hex (64 chars) — agency PR #21, deployed `a57afbb`.
+2. **Agent client DTO mismatch (P0, new)** — BFF `agent_client.rs` used
+   `camelCase` serde renames for `AgentView`/`AppointmentView`/
+   `IdentityLinkView` while Agent Service emits snake_case; identity-link
+   resolution failed at login (`error decoding response body`), leaving
+   `agentId=null` and candidate-only workspace. Also corrected
+   `AppointmentView` types (Option refs, NaiveDate). BFF PR #18,
+   deployed `fe00193`. 5 new contract tests PASSED.
+
+### Live evidence (DEV, real Keycloak OIDC code+PKCE flow)
+
+- `POST /api/v1/agent-assignments` (e2e-agent-admin, platform admin):
+  **201** — assignment `01a1debf-…` created for agent
+  `11111111-…` / unit `01a1dd66-…` (previously 500).
+- Claim-less user token (`demo.agent-1`, sub `4a6ba5c0-…`):
+  `GET /agents/{id}/current-assignment` → **200** single `AssignmentDto`
+  object (identity resolved via Agent Service `identity-links/resolve`,
+  service-account credentials from compose env).
+- BFF session login → callback **303**, `iaop_session` cookie issued.
+- `GET /api/v1/me` → **200**: `agentId`, `agentCode=AGT-QA-0001`,
+  `lifecycleStatus=ACTIVE`, `activeWorkspace=<unit id>`.
+- `GET /api/v1/me/workspaces` → **200**: real workspace "Unit R"
+  (agencyCode `R`, role PRIMARY) — no longer candidate-only.
+- `GET /api/v1/agency/hierarchy` → **200**: ancestor IDs resolved to
+  unit objects (`agencyId=R`, `agencyName=Unit R`, level REGION).
+- `GET /api/v1/agency/my-team` → **200** empty (agent has no reports).
+- Negative: BFF `/api/v1/me` without cookie → **401**; forged cookie →
+  **401**; Agency `/api/v1/organization-units` no-auth → **401**.
+
+### Test commands executed
+
+- `cargo check --workspace` (Docker `rust:slim-bookworm`): PASSED
+  (agency `a57afbb`, bff `fe00193`).
+- `cargo test -p iaop_agent_bff-infrastructure agent_client`: 5/5 PASSED.
+- Live curl evidence above against deployed containers.
+
+### Still open
+
+- Transfer approval workflow: `REQUIREMENT_UNRESOLVED`.
+- Promotion/rank-change: no approved mapping — not implemented.
+- Kafka failure-injection matrix, DB concurrency suite, performance
+  benchmarks: not rerun this pass.
+- Scalar SSO-gated content verification still pending.
+- Lifecycle endpoints deployed but not yet exercised live.
+
+## Verdict (updated)
+
+`CONDITIONALLY DEV READY` — the full Keycloak → BFF session → Agency
+Service → Agent Service identity path is now verified live on DEV with a
+real agent; remaining gaps are business-scope decisions and unrun
+non-functional suites, not P0 defects.
