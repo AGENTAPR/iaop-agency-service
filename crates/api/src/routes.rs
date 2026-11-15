@@ -241,6 +241,18 @@ fn respond(e: AppError) -> Response {
         AppError::Forbidden(_) => (StatusCode::FORBIDDEN, "FORBIDDEN"),
         AppError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "UNAUTHENTICATED"),
         AppError::ServiceUnavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "UNAVAILABLE"),
+        AppError::AgentNotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+        AppError::PreconditionFailed(_) => (StatusCode::PRECONDITION_FAILED, "PRECONDITION_FAILED"),
+        AppError::Domain(iaop_agency_service_domain::error::DomainError::NotFound) => {
+            (StatusCode::NOT_FOUND, "NOT_FOUND")
+        }
+        AppError::Domain(iaop_agency_service_domain::error::DomainError::Validation(_)) => {
+            (StatusCode::BAD_REQUEST, "VALIDATION")
+        }
+        AppError::Domain(
+            iaop_agency_service_domain::error::DomainError::Conflict(_)
+            | iaop_agency_service_domain::error::DomainError::InvalidState,
+        ) => (StatusCode::CONFLICT, "CONFLICT"),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
     };
     (
