@@ -678,11 +678,12 @@ async fn resource_authz_negative_tests() {
     let pool = pool().await;
     let store = store(&pool);
 
-    // 1. Setup Agency 1 + Unit 1, and Agency 2 + Unit 2
-    let agency_1 = mk_agency(&pool, "AG-AUTHZ-1").await;
+    // 1. Setup Agency 1 + Unit 1, and Agency 2 + Unit 2 (unique codes: tests are not idempotent)
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let agency_1 = mk_agency(&pool, &format!("AG-A1-{suffix}")).await;
     let unit_1 = mk_unit(&pool, agency_1, "U1", UnitKind::Region, None, "2026-01-01").await;
 
-    let agency_2 = mk_agency(&pool, "AG-AUTHZ-2").await;
+    let agency_2 = mk_agency(&pool, &format!("AG-A2-{suffix}")).await;
     let unit_2 = mk_unit(&pool, agency_2, "U2", UnitKind::Region, None, "2026-01-01").await;
 
     let agent_a = EntityId::new();
