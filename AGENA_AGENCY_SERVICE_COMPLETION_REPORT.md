@@ -118,3 +118,44 @@ Every operation has method/path/operationId/summary/request+response schemas/err
 **CONDITIONALLY DEV READY**
 
 Core P0 security findings (AG-01…AG-06, AG-08…AG-10) are fixed, tested against real Postgres/Kafka/Keycloak, built, deployed, and verified live. The service fails closed everywhere verified. Blocking items before "VERIFIED": transfer-approval policy decision (AG-07), Keycloak `agent_id` claim issuance for scoped agents, and performance evidence.
+
+---
+
+# Addendum — 2026-11-15 (second pass): BFF contract fix, identity resolution, lifecycle endpoints, contract resync
+
+Base: `development` @ `0805728` (post-merge HEAD). All changes merged via PRs #16–#19 under `protect-development`.
+
+## What changed since the report above
+
+| Area | Before | After | Evidence |
+|---|---|---|---|
+| `GET /agents/{id}/current-assignment` | Returned JSON array of all as-of assignments; OpenAPI declared single `AssignmentDto`; BFF expected `Option<...>` | Returns single PRIMARY+ACTIVE `AssignmentDto`, 404 when absent | `queries::agent_current_assignment`; `cargo check` PASSED (Docker rust:slim) |
+| Agent BFF `AgencyClient` | `#[serde(rename_all="camelCase")]` on all view DTOs — deserialization of snake_case upstream payloads failed; `get_ancestors` expected `Vec<OrgUnitView>` but upstream returns `[string]` IDs | snake_case DTOs; `get_ancestors -> Vec<Uuid>` resolved via `get_unit` in hierarchy + workspace flows; 7 consumer contract tests | `cargo test -p iaop_agent_bff-infrastructure` 23/23 PASSED |
+| Agent identity resolution | Claim-less agent tokens -> 403 (fail-closed, no path to scoped access) | Server-side resolution: own `(issuer, subject)` -> Agent Service `identity-links/resolve`, service-account auth, 60s TTL cache, staff exempt, 503 on registry outage | `auth.rs`, `agent_validation.rs`, `ports.rs`; `cargo check` PASSED |
+| Agency lifecycle | Domain methods existed, no commands/endpoints | `POST /api/v1/agencies/{id}/lifecycle` (SUSPEND/REINSTATE/TERMINATE), global-write authz, optimistic concurrency, outbox `agency.status-changed.v1` + audit | `commands::transition_agency`, route + OpenAPI registered |
+| Unit lifecycle | Domain methods existed, no endpoints | `POST /api/v1/organization-units/{id}/lifecycle` (ACTIVATE/DEACTIVATE), unit scope + HierarchyManage, outbox `agency.unit-status-changed.v1` | `commands::transition_unit` |
+| OpenAPI | 15 paths | 17 paths (lifecycle x2); deterministic export via `dump_openapi_spec` test | `target/agency_service_openapi.json` generated & synced |
+| Central contract | 15-path spec @ old SHA | 17-path spec @ `0805728`, `sourceCommit`/`apiVersion 0.2.0` pinned | `iaop-api-contracts` PR #16 MERGED; validator SUCCESS (19/19) |
+
+## Test results this pass
+
+- `cargo check --workspace` (iaop-agency-service, Docker `rust:slim-bookworm`): PASSED
+- `cargo test -p iaop_agency_service-api`: PASSED (incl. openapi path/security + dump)
+- `cargo test --workspace --lib` (agency): 8 passed, 1 failed — `kafka_delivery_succeeds_against_live_broker` requires live broker (env-dependent; previously verified 9/9 on InstaBox)
+- `cargo check -p iaop_agent_bff-infrastructure -p iaop_agent_bff-api`: PASSED
+- `cargo test -p iaop_agent_bff-infrastructure --lib`: 23/23 PASSED (7 new contract tests)
+- `python tools/validate_contracts.py --env development`: SUCCESS, 19 docs / 19 services
+
+## Still open (honest status)
+
+- **InstaBox DEV redeploy NOT performed** — `instabox` CLI unavailable in this environment; deployed image still runs pre-lifecycle code. Runtime verification of new endpoints + identity resolution is PENDING.
+- Live E2E agent-token -> scoped 200 flow unverified (needs deployed build + linked agent identity).
+- Transfer approval workflow: still `REQUIREMENT_UNRESOLVED` (immediate-effect only, documented).
+- Promotion/rank-change: no approved mapping exists — not implemented by design.
+- DB integration tests for new lifecycle endpoints not added (domain unit tests cover transitions; endpoint-level DB tests pending).
+- Performance benchmarks, Kafka failure-injection matrix: not rerun this pass.
+- Scalar portal content verification blocked by SSO (401 without session).
+
+## Verdict this pass
+
+`CONDITIONALLY DEV READY` — P0 contract/identity defects fixed and compile+unit verified; deployment and live E2E verification outstanding.
