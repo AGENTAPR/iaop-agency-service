@@ -2,14 +2,16 @@ use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 /// Stable identifier for domain entities and aggregates.
 ///
 /// Wraps a UUIDv7 so identifiers are time-ordered and globally unique
 /// without exposing the raw UUID type throughout the domain model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(transparent)]
+#[schema(value_type = String)]
 pub struct EntityId(Uuid);
 
 impl EntityId {

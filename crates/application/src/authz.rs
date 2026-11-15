@@ -20,10 +20,7 @@ use crate::principal::Principal;
 /// Only platform-level administrative and audit roles belong here.
 /// Agency-local roles (`IAOP_AGENCY_ADMIN`, `AGENCY_AUDITOR`, …) are intentionally
 /// excluded; they receive Scoped access determined by their own assignments.
-pub const GLOBAL_STAFF_ROLES: &[&str] = &[
-    "IAOP_PLATFORM_ADMIN",
-    "IAOP_GLOBAL_AUDITOR",
-];
+pub const GLOBAL_STAFF_ROLES: &[&str] = &["IAOP_PLATFORM_ADMIN", "IAOP_GLOBAL_AUDITOR"];
 
 /// Returns `true` if the principal holds a role that grants Global org scope.
 pub fn is_staff(principal: &Principal) -> bool {
@@ -31,6 +28,20 @@ pub fn is_staff(principal: &Principal) -> bool {
         .roles
         .iter()
         .any(|r| GLOBAL_STAFF_ROLES.contains(&r.as_str()))
+}
+
+/// Roles permitted to perform GLOBAL organizational mutations.
+/// GLOBAL_READ != GLOBAL_WRITE: read-only global roles such as
+/// `IAOP_GLOBAL_AUDITOR` receive `OrgScope::Global` for reads but must
+/// never mutate organizational structure.
+pub const GLOBAL_WRITE_ROLES: &[&str] = &["IAOP_PLATFORM_ADMIN"];
+
+/// Returns `true` if the principal may perform global organizational writes.
+pub fn is_global_writer(principal: &Principal) -> bool {
+    principal
+        .roles
+        .iter()
+        .any(|r| GLOBAL_WRITE_ROLES.contains(&r.as_str()))
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +151,9 @@ pub async fn resolve_scope<S: OrgStore>(
     })?;
 
     // Only ACTIVE assignments at today's date grant current access.
-    let assignments = store.assignments_for_agent_as_of(agent_id, auth_as_of).await?;
+    let assignments = store
+        .assignments_for_agent_as_of(agent_id, auth_as_of)
+        .await?;
     if assignments.is_empty() {
         return Err(AppError::Forbidden("no active agency assignment".into()));
     }
@@ -202,7 +215,14 @@ pub async fn resolve_scope<S: OrgStore>(
 // command's effective date: a caller must hold organizational scope NOW.
 
 /// Staff-only guard for top-level administrative creation (e.g. new agency).
+/// Requires BOTH a global-write role AND Global organizational scope —
+/// a global auditor's read scope must not authorize mutations.
 pub async fn require_global<S: OrgStore>(store: &S, principal: &Principal) -> Result<(), AppError> {
+    if !is_global_writer(principal) {
+        return Err(AppError::Forbidden(
+            "global organizational mutations require a platform-administration role".into(),
+        ));
+    }
     let today = chrono::Utc::now().date_naive();
     match resolve_scope(store, principal, today).await? {
         OrgScope::Global => Ok(()),

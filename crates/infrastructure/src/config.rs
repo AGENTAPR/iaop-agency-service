@@ -94,10 +94,12 @@ impl AppConfig {
                 ));
             }
         };
-        if auth_mode == AuthMode::DevBypass && is_production {
-            return Err(ConfigError::UnsafeConfig(
-                "AUTH_MODE=dev is forbidden when ENVIRONMENT=production".into(),
-            ));
+        // Dev auth bypass is ONLY permitted in an explicitly isolated local
+        // environment. Shared DEV/staging/production must use real JWT auth.
+        if auth_mode == AuthMode::DevBypass && !environment.eq_ignore_ascii_case("local") {
+            return Err(ConfigError::UnsafeConfig(format!(
+                "AUTH_MODE=dev is forbidden when ENVIRONMENT={environment} (allowed only for ENVIRONMENT=local)"
+            )));
         }
         if auth_mode == AuthMode::Jwt {
             for var in ["OIDC_ISSUER", "OIDC_JWKS_URL", "OIDC_AUDIENCE"] {

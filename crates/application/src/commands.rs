@@ -23,7 +23,7 @@ pub struct CreateAgency {
     pub principal: Principal,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AgencyDto {
     pub id: EntityId,
     pub code: String,
@@ -80,7 +80,7 @@ pub struct CreateUnit {
     pub principal: Principal,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UnitDto {
     pub id: EntityId,
     pub agency_id: EntityId,
@@ -218,7 +218,7 @@ pub struct AssignAgent {
     pub principal: Principal,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AssignmentDto {
     pub id: EntityId,
     pub agent_id: EntityId,
@@ -452,7 +452,7 @@ pub struct AssignLeader {
     pub principal: Principal,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LeadershipDto {
     pub id: EntityId,
     pub unit_id: EntityId,

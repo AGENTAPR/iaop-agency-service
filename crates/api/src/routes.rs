@@ -14,14 +14,14 @@ use iaop_agency_service_application::commands::*;
 use iaop_agency_service_application::error::AppError;
 use iaop_agency_service_application::queries;
 use iaop_agency_service_application::service_info::GetServiceInfoQuery;
-use iaop_agency_service_domain::assignment::AssignmentType;
+use iaop_agency_service_domain::assignment::{AssignmentType, Transfer};
 use iaop_agency_service_domain::entity_id::EntityId;
 use iaop_agency_service_domain::org_unit::UnitKind;
 use iaop_agency_service_infrastructure::persistence;
 use utoipa::OpenApi;
 
 use crate::auth::AuthPrincipal;
-use crate::dto::{HealthResponse, SystemInfoResponse};
+use crate::dto::{HealthResponse, ProblemDetails, SystemInfoResponse};
 use crate::middleware;
 use crate::openapi::ApiDoc;
 use crate::state::AppState;
@@ -243,26 +243,27 @@ fn respond(e: AppError) -> Response {
         .into_response()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ListQuery {
     limit: Option<u32>,
     cursor: Option<Uuid>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AsOfQuery {
     as_of: Option<NaiveDate>,
 }
 
 // ---- agencies ----
 
-#[derive(Deserialize, serde::Serialize)]
+#[derive(Deserialize, serde::Serialize, utoipa::ToSchema)]
 struct CreateAgencyBody {
     code: String,
     name: String,
 }
 
-async fn create_agency(
+#[utoipa::path(post, path = "/api/v1/agencies", tag = "agency", operation_id = "createAgency", summary = "Create agency", description = "Creates a top-level agency. Requires platform-administration role and global organizational scope.", request_body = CreateAgencyBody, responses((status = 201, description = "Agency created", body = AgencyDto),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn create_agency(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     headers: HeaderMap,
@@ -317,7 +318,8 @@ async fn create_agency(
     }
 }
 
-async fn list_agencies(
+#[utoipa::path(get, path = "/api/v1/agencies", tag = "agency", operation_id = "listAgencies", summary = "List agencies", description = "Returns agencies visible within the caller organizational scope.", params(("limit" = Option<u32>, Query, description = "Page size (max 200)"),("cursor" = Option<Uuid>, Query, description = "Pagination cursor")), responses((status = 200, description = "Agencies", body = [AgencyDto]),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn list_agencies(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Query(q): Query<ListQuery>,
@@ -332,7 +334,8 @@ async fn list_agencies(
     }
 }
 
-async fn get_agency(
+#[utoipa::path(get, path = "/api/v1/agencies/{id}", tag = "agency", operation_id = "getAgency", summary = "Get agency", description = "Returns a single agency if inside the caller organizational scope.", params(("id" = String, Path, description = "Agency ID")), responses((status = 200, description = "Agency", body = AgencyDto),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn get_agency(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Path(id): Path<String>,
@@ -353,7 +356,7 @@ async fn get_agency(
 
 // ---- org units ----
 
-#[derive(Deserialize, serde::Serialize)]
+#[derive(Deserialize, serde::Serialize, utoipa::ToSchema)]
 struct CreateUnitBody {
     agency_id: String,
     code: String,
@@ -363,7 +366,8 @@ struct CreateUnitBody {
     effective_from: NaiveDate,
 }
 
-async fn create_unit(
+#[utoipa::path(post, path = "/api/v1/organization-units", tag = "agency", operation_id = "createUnit", summary = "Create organizational unit", description = "Creates a unit under an agency (optionally with initial parent). Requires hierarchy-manage permission and scope over the target agency.", request_body = CreateUnitBody, responses((status = 201, description = "Unit created", body = UnitDto),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn create_unit(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     headers: HeaderMap,
@@ -439,7 +443,8 @@ async fn create_unit(
     }
 }
 
-async fn list_units(
+#[utoipa::path(get, path = "/api/v1/organization-units", tag = "agency", operation_id = "listUnits", summary = "List organizational units", description = "Returns units visible within the caller organizational scope.", params(("agency_id" = Option<Uuid>, Query, description = "Filter by agency"),("limit" = Option<u32>, Query),("cursor" = Option<Uuid>, Query)), responses((status = 200, description = "Units", body = [UnitDto]),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn list_units(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Query(q): Query<ListQuery>,
@@ -454,7 +459,8 @@ async fn list_units(
     }
 }
 
-async fn get_unit(
+#[utoipa::path(get, path = "/api/v1/organization-units/{id}", tag = "agency", operation_id = "getUnit", summary = "Get organizational unit", description = "Returns a single unit if inside the caller organizational scope.", params(("id" = String, Path, description = "Unit ID")), responses((status = 200, description = "Unit", body = UnitDto),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn get_unit(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Path(id): Path<String>,
@@ -473,14 +479,15 @@ async fn get_unit(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ChangeParentBody {
     new_parent_id: Option<String>,
     effective_from: NaiveDate,
     expected_version: i64,
 }
 
-async fn change_parent(
+#[utoipa::path(patch, path = "/api/v1/organization-units/{id}/parent", tag = "agency", operation_id = "changeUnitParent", summary = "Reparent organizational unit", description = "Changes a unit parent effective-dated; requires scope over the unit and optimistic concurrency via expected_version.", params(("id" = String, Path, description = "Unit ID")), request_body = ChangeParentBody, responses((status = 200, description = "Unit updated", body = UnitDto),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn change_parent(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Path(id): Path<String>,
@@ -528,7 +535,8 @@ async fn change_parent(
     }
 }
 
-async fn get_ancestors(
+#[utoipa::path(get, path = "/api/v1/organization-units/{id}/ancestors", tag = "agency", operation_id = "getUnitAncestors", summary = "Unit ancestor chain", description = "Returns ancestor unit IDs as of a date (default today). Authorization is evaluated at the current date, never at as_of.", params(("id" = String, Path, description = "Unit ID"),("as_of" = Option<NaiveDate>, Query, description = "Historical date for data selection only")), responses((status = 200, description = "Ancestor unit IDs", body = [String]),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn get_ancestors(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Path(id): Path<String>,
@@ -548,7 +556,8 @@ async fn get_ancestors(
     }
 }
 
-async fn get_descendants(
+#[utoipa::path(get, path = "/api/v1/organization-units/{id}/descendants", tag = "agency", operation_id = "getUnitDescendants", summary = "Unit descendants", description = "Returns descendant unit IDs in the current hierarchy.", params(("id" = String, Path, description = "Unit ID")), responses((status = 200, description = "Descendant unit IDs", body = [String]),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn get_descendants(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Path(id): Path<String>,
@@ -569,7 +578,7 @@ async fn get_descendants(
 
 // ---- assignments ----
 
-#[derive(Deserialize, serde::Serialize)]
+#[derive(Deserialize, serde::Serialize, utoipa::ToSchema)]
 struct AssignBody {
     agent_id: String,
     unit_id: String,
@@ -577,7 +586,8 @@ struct AssignBody {
     effective_from: NaiveDate,
 }
 
-async fn assign_agent(
+#[utoipa::path(post, path = "/api/v1/agent-assignments", tag = "agency", operation_id = "assignAgent", summary = "Assign agent to unit", description = "Creates an agent assignment. Requires assignment-manage permission and scope over the destination unit; agent lifecycle is validated against Agent Service.", request_body = AssignBody, responses((status = 201, description = "Assignment created", body = AssignmentDto),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn assign_agent(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     headers: HeaderMap,
@@ -654,7 +664,8 @@ async fn assign_agent(
     }
 }
 
-async fn agent_assignments(
+#[utoipa::path(get, path = "/api/v1/agents/{agent_id}/assignments", tag = "agency", operation_id = "agentAssignments", summary = "Agent assignments", description = "Assignments for an agent as of a date. Scoped callers receive only records inside their accessible units.", params(("agent_id" = String, Path, description = "Agent ID"),("as_of" = Option<NaiveDate>, Query)), responses((status = 200, description = "Assignments", body = [AssignmentDto]),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn agent_assignments(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Path(agent_id): Path<String>,
@@ -674,7 +685,8 @@ async fn agent_assignments(
     }
 }
 
-async fn agent_current_assignment(
+#[utoipa::path(get, path = "/api/v1/agents/{agent_id}/current-assignment", tag = "agency", operation_id = "agentCurrentAssignment", summary = "Agent current assignment", description = "The agent current primary assignment.", params(("agent_id" = String, Path, description = "Agent ID")), responses((status = 200, description = "Current assignment", body = AssignmentDto),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn agent_current_assignment(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Path(agent_id): Path<String>,
@@ -693,7 +705,8 @@ async fn agent_current_assignment(
     }
 }
 
-async fn unit_assignments(
+#[utoipa::path(get, path = "/api/v1/organization-units/{id}/assignments", tag = "agency", operation_id = "unitAssignments", summary = "Unit assignments", description = "Agent assignments in a unit as of a date (default today).", params(("id" = String, Path, description = "Unit ID"),("as_of" = Option<NaiveDate>, Query)), responses((status = 200, description = "Assignments", body = [AssignmentDto]),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn unit_assignments(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Path(id): Path<String>,
@@ -715,7 +728,7 @@ async fn unit_assignments(
 
 // ---- transfers ----
 
-#[derive(Deserialize, serde::Serialize)]
+#[derive(Deserialize, serde::Serialize, utoipa::ToSchema)]
 struct TransferBody {
     agent_id: String,
     to_unit_id: String,
@@ -723,7 +736,8 @@ struct TransferBody {
     reason: Option<String>,
 }
 
-async fn transfer_agent(
+#[utoipa::path(post, path = "/api/v1/agency-transfers", tag = "agency", operation_id = "transferAgent", summary = "Transfer agent", description = "Immediately-effective transfer: ends the current primary assignment and creates the new one plus a transfer record. Caller must hold scope over BOTH source and destination units. Idempotency-Key supported.", request_body = TransferBody, responses((status = 201, description = "Transfer executed", body = AssignmentDto),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn transfer_agent(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     headers: HeaderMap,
@@ -796,7 +810,8 @@ async fn transfer_agent(
     }
 }
 
-async fn list_transfers(
+#[utoipa::path(get, path = "/api/v1/agency-transfers", tag = "agency", operation_id = "listTransfers", summary = "Transfer history", description = "Transfer records. Scoped callers may only view their own transfer history.", params(("agent_id" = Option<Uuid>, Query, description = "Filter by agent"),("limit" = Option<u32>, Query),("cursor" = Option<Uuid>, Query)), responses((status = 200, description = "Transfers", body = [Transfer]),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn list_transfers(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Query(q): Query<ListQuery>,
@@ -813,7 +828,7 @@ async fn list_transfers(
 
 // ---- leadership ----
 
-#[derive(Deserialize, serde::Serialize)]
+#[derive(Deserialize, serde::Serialize, utoipa::ToSchema)]
 struct AssignLeaderBody {
     unit_id: String,
     agent_id: String,
@@ -821,7 +836,8 @@ struct AssignLeaderBody {
     effective_from: NaiveDate,
 }
 
-async fn assign_leader_route(
+#[utoipa::path(post, path = "/api/v1/leadership-appointments", tag = "agency", operation_id = "assignLeader", summary = "Assign unit leader", description = "Creates an effective-dated leadership appointment. Requires leadership-manage permission and scope over the unit.", request_body = AssignLeaderBody, responses((status = 201, description = "Appointment created", body = LeadershipDto),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn assign_leader_route(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     headers: HeaderMap,
@@ -895,13 +911,14 @@ async fn assign_leader_route(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct EndLeaderBody {
     effective_to: NaiveDate,
     expected_version: i64,
 }
 
-async fn end_leader_route(
+#[utoipa::path(post, path = "/api/v1/leadership-appointments/{id}/end", tag = "agency", operation_id = "endLeader", summary = "End leadership appointment", description = "Ends an appointment effective-dated with optimistic concurrency.", params(("id" = String, Path, description = "Appointment ID")), request_body = EndLeaderBody, responses((status = 200, description = "Appointment ended", body = LeadershipDto),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn end_leader_route(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Path(id): Path<String>,
@@ -944,7 +961,8 @@ async fn end_leader_route(
     }
 }
 
-async fn get_leaders(
+#[utoipa::path(get, path = "/api/v1/organization-units/{id}/leaders", tag = "agency", operation_id = "unitLeaders", summary = "Unit leaders", description = "Leadership appointments for a unit as of a date (default today).", params(("id" = String, Path, description = "Unit ID"),("as_of" = Option<NaiveDate>, Query)), responses((status = 200, description = "Leadership appointments", body = [LeadershipDto]),(status = 400, description = "Malformed request", body = ProblemDetails),(status = 401, description = "Unauthenticated", body = ProblemDetails),(status = 403, description = "Outside organizational scope or missing permission", body = ProblemDetails),(status = 404, description = "Not found", body = ProblemDetails),(status = 409, description = "Conflict", body = ProblemDetails),(status = 503, description = "Dependency unavailable", body = ProblemDetails)), security(("bearerAuth" = [])))]
+pub(crate) async fn get_leaders(
     State(state): State<AppState>,
     AuthPrincipal(p): AuthPrincipal,
     Path(id): Path<String>,

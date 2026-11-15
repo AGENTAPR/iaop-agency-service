@@ -10,4 +10,5 @@ publish.workspace = true
 serde = { workspace = true, features = ["derive"] }
 uuid.workspace = true
 chrono.workspace = true
+utoipa.workspace = true
 thiserror.workspace = true

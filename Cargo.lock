@@ -837,6 +837,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "thiserror 2.0.21",
+ "utoipa",
  "uuid",
 ]
 
@@ -847,6 +848,7 @@ dependencies = [
  "chrono",
  "serde",
  "thiserror 2.0.21",
+ "utoipa",
  "uuid",
 ]
 

@@ -171,7 +171,24 @@ pub async fn agent_assignments_as_of<S: OrgStore>(
     }
 
     let rows = store.assignments_for_agent_as_of(agent_id, date).await?;
-    Ok(rows.iter().map(AssignmentDto::from).collect())
+    // Per-record authorization: a scoped caller only receives assignments
+    // inside their accessible units — never the target's full history.
+    let filtered: Vec<AssignmentDto> = match &scope {
+        OrgScope::Global => rows.iter().map(AssignmentDto::from).collect(),
+        OrgScope::Scoped {
+            agent_id: self_id,
+            accessible_units,
+            ..
+        } if *self_id == agent_id => rows.iter().map(AssignmentDto::from).collect(),
+        OrgScope::Scoped {
+            accessible_units, ..
+        } => rows
+            .iter()
+            .filter(|a| accessible_units.contains(&a.unit_id))
+            .map(AssignmentDto::from)
+            .collect(),
+    };
+    Ok(filtered)
 }
 
 /// Full assignment history for an agent.
@@ -207,7 +224,24 @@ pub async fn agent_assignment_history<S: OrgStore>(
     }
 
     let rows = store.assignments_for_agent(agent_id).await?;
-    Ok(rows.iter().map(AssignmentDto::from).collect())
+    // Per-record authorization: scoped callers receive only assignments
+    // inside their accessible units.
+    let filtered: Vec<AssignmentDto> = match &scope {
+        OrgScope::Global => rows.iter().map(AssignmentDto::from).collect(),
+        OrgScope::Scoped {
+            agent_id: self_id,
+            accessible_units,
+            ..
+        } if *self_id == agent_id => rows.iter().map(AssignmentDto::from).collect(),
+        OrgScope::Scoped {
+            accessible_units, ..
+        } => rows
+            .iter()
+            .filter(|a| accessible_units.contains(&a.unit_id))
+            .map(AssignmentDto::from)
+            .collect(),
+    };
+    Ok(filtered)
 }
 
 /// Agent assignments for a unit as of a date (default today).
