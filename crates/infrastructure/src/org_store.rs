@@ -204,7 +204,7 @@ impl OrgStore for PgOrgStoreWithPool {
         cursor: Option<Uuid>,
     ) -> Result<Vec<Agency>, AppError> {
         let rows = sqlx::query(
-            "SELECT * FROM agencies WHERE ($1::uuid IS NULL OR id > $1)
+            "SELECT * FROM agencies WHERE ($1::uuid IS NULL OR id > $1) AND status = 'ACTIVE'
              ORDER BY id LIMIT $2",
         )
         .bind(cursor)
